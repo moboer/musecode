@@ -61,12 +61,13 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"version":  s.cfg.Version,
-		"sessions": s.hub.Count(),
-		"uptimeMs": s.hub.Uptime().Milliseconds(),
-		"modes":    []string{"ws", "poll"},
-		"serverTs": time.Now().UnixMilli(),
+		"ok":           true,
+		"version":      s.cfg.Version,
+		"sessions":     s.hub.Count(),
+		"droppedTotal": s.hub.DroppedTotal(),
+		"uptimeMs":     s.hub.Uptime().Milliseconds(),
+		"modes":        []string{"ws", "poll"},
+		"serverTs":     time.Now().UnixMilli(),
 	})
 }
 

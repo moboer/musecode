@@ -15,7 +15,9 @@
     "build": "tsc -b && npm -w examples/web run build",
     "typecheck": "tsc -b && npm -w examples/web run typecheck",
     "test": "vitest run && npm run test:server",
-    "test:server": "go -C server test ./..."
+    "test:server": "go -C server test ./...",
+    "test:probe": "vitest run --config vitest.probe.config.ts",
+    "check:host": "node scripts/check-core-host.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

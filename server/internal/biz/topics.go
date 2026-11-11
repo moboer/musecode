@@ -44,12 +44,13 @@ func (s *Service) echo(_ context.Context, _ *hub.Session, req protocol.Message) 
 
 func (s *Service) systemInfo(_ context.Context, _ *hub.Session, _ protocol.Message) (any, *protocol.MessageError) {
 	return map[string]any{
-		"version":  s.version,
-		"uptimeMs": time.Since(s.startedAt).Milliseconds(),
-		"sessions": s.h.Count(),
-		"serverTs": time.Now().UnixMilli(),
-		"modes":    []string{"ws", "poll"},
-		"topics":   []string{"echo", "system.info", "metrics.snapshot", "slow.echo", "boom", "metrics.cpu", "metrics.mem", "news.notice"},
+		"version":      s.version,
+		"uptimeMs":     time.Since(s.startedAt).Milliseconds(),
+		"sessions":     s.h.Count(),
+		"droppedTotal": s.h.DroppedTotal(),
+		"serverTs":     time.Now().UnixMilli(),
+		"modes":        []string{"ws", "poll"},
+		"topics":       []string{"echo", "system.info", "metrics.snapshot", "slow.echo", "boom", "metrics.cpu", "metrics.mem", "news.notice"},
 	}, nil
 }
 

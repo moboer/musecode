@@ -1,4 +1,6 @@
 export { BaseStationClient } from "./client.js";
+export { browserHost } from "./host.js";
+export type { CoreHost, HostStorage } from "./host.js";
 export { initBaseStation, getBaseStation, isBaseStationReady } from "./singleton.js";
 export { Subscription } from "./types.js";
 export type {
@@ -10,6 +12,7 @@ export type {
   OnceOptions,
   ReconnectOptions,
   RequestOptions,
+  SeqGapInfo,
   StateChangeInfo,
   SubscribeOptions,
   Transport,

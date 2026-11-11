@@ -1,6 +1,8 @@
 import type { Message } from "@basestation/protocol";
 
 import { ConnectionError } from "../errors.js";
+import { browserHost } from "../host.js";
+import type { CoreHost } from "../host.js";
 import type { CloseReason, Transport, TransportInfo } from "../types.js";
 
 interface PollBody {
@@ -33,7 +35,8 @@ export class PollingTransport implements Transport {
     private readonly baseUrl: string,
     sessionId: string | null,
     private pollWaitMs: number,
-    private readonly fetchImpl: typeof fetch = globalThis.fetch,
+    private readonly fetchImpl: typeof fetch = browserHost.fetch,
+    private readonly host: CoreHost = browserHost,
   ) {
     this.sessionId = sessionId;
   }
@@ -77,7 +80,7 @@ export class PollingTransport implements Transport {
     this.sessionId = body.sessionId;
     this.running = true;
     this.lastSeq = 0;
-    this.flushTimer = setInterval(() => {
+    this.flushTimer = this.host.setInterval(() => {
       void this.flush();
     }, FLUSH_INTERVAL_MS);
     void this.pollLoop();
@@ -102,7 +105,7 @@ export class PollingTransport implements Transport {
       this.abort = null;
     }
     if (this.flushTimer) {
-      clearInterval(this.flushTimer);
+      this.host.clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
     this.queue = [];
@@ -129,7 +132,7 @@ export class PollingTransport implements Transport {
             this.emitClose("switch");
             return;
           }
-          await sleep(250);
+          await sleep(this.host, 250);
           continue;
         }
         this.replacedByWS = 0;
@@ -176,7 +179,7 @@ export class PollingTransport implements Transport {
     if (!this.running) return;
     this.running = false;
     if (this.flushTimer) {
-      clearInterval(this.flushTimer);
+      this.host.clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
     this.closeCb?.(reason);
@@ -192,6 +195,6 @@ function isAbortError(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { name?: string }).name === "AbortError";
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(host: CoreHost, ms: number): Promise<void> {
+  return new Promise((resolve) => host.setTimeout(resolve, ms));
 }

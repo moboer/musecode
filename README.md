@@ -81,8 +81,10 @@ npm run dev:web
 | `npm run dev:web` | 只启动 Vite 演示页 |
 | `npm run typecheck` | `tsc -b` + 演示页类型检查 |
 | `npm run build` | 构建 SDK 与演示页 |
-| `npm test` | Vitest（22 个用例）+ `go test ./...` |
+| `npm test` | Vitest 单元测试（23 个用例）+ `go test ./...`，克隆后开箱可跑、全绿 |
 | `npm run test:server` | 仅 Go 测试 |
+| `npm run test:probe` | 活服务器探针（需先 `npm run dev`）：真实基站上的降级/续接联调，不在默认套件内 |
+| `npm run check:host` | 宿主纪律检查：core 不得直接引用 window/document/全局存储（见方案 v2 宿主接口） |
 
 ## 协议速览
 

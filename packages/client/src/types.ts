@@ -1,5 +1,7 @@
 import type { Message } from "@basestation/protocol";
 
+import type { CoreHost } from "./host.js";
+
 export type TransportKind = "ws" | "poll";
 
 export type ClientState = "idle" | "connecting" | "connected" | "degraded" | "reconnecting" | "closed";
@@ -57,7 +59,18 @@ export interface BaseStationOptions {
   sessionStorageKey?: string | false;
   /** 依赖注入，主要用于测试 */
   transportFactory?: TransportFactory;
+  /** 宿主接口（定时器/时钟/存储/网络的注入点），默认浏览器主线程宿主 */
+  host?: CoreHost;
+  /** 入站 seq 出现缺口（中间帧被丢弃）时的告警出口；同时也会记 warn 日志 */
+  onSeqGap?: (info: SeqGapInfo) => void;
   logger?: (level: LogLevel, event: string, meta?: unknown) => void;
+}
+
+/** 入站 seq 缺口信息：expected 本应到达的下一帧，received 实际到达，missed 中间丢了几帧。 */
+export interface SeqGapInfo {
+  expected: number;
+  received: number;
+  missed: number;
 }
 
 export interface StateChangeInfo {

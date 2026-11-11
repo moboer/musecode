@@ -127,6 +127,44 @@ func TestRequestHandlerAndDedupe(t *testing.T) {
 	}
 }
 
+func TestRequestInflightDedupe(t *testing.T) {
+	h := testHub()
+	sess, _ := h.CreateOrResume("")
+
+	var calls atomic.Int64
+	release := make(chan struct{})
+	h.HandleRequest("slow.work", func(_ context.Context, _ *Session, _ protocol.Message) (any, *protocol.MessageError) {
+		calls.Add(1)
+		<-release // 阻塞住，让第二个同 id 请求在执行中途到达
+		return map[string]any{"done": true}, nil
+	})
+
+	// 第一个请求进入处理器后，第二个同 id 请求并发到达。
+	req(h, sess, "req-x", "slow.work")
+	deadline := time.Now().Add(time.Second)
+	for calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("handler not started, calls = %d", calls.Load())
+	}
+	req(h, sess, "req-x", "slow.work")
+
+	// 给在途等待者登记的时间，然后放行处理器。
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	resps := collect(t, sess, 2, 2*time.Second)
+	for _, r := range resps {
+		if r.Type != protocol.TypeRes || r.ReplyTo != "req-x" || r.Error != nil {
+			t.Fatalf("unexpected response: %+v", r)
+		}
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("handler executed %d times, want 1 (inflight dedupe)", calls.Load())
+	}
+}
+
 func TestUnknownTopic(t *testing.T) {
 	h := testHub()
 	sess, _ := h.CreateOrResume("")

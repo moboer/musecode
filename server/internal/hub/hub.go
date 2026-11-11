@@ -27,6 +27,13 @@ type dedupeEntry struct {
 	expires time.Time
 }
 
+// inflightCall 是一次正在执行中的请求。在途去重：
+// 同 (sessionId, reqId) 的重复请求不再启动第二次执行，而是等这次执行的结果。
+type inflightCall struct {
+	done chan struct{}
+	resp protocol.Message
+}
+
 // Hub 是基站消息中枢。
 type Hub struct {
 	mu            sync.RWMutex
@@ -34,6 +41,7 @@ type Hub struct {
 	subsByPattern map[string]map[string]struct{}
 	handlers      map[string]HandlerFunc
 	dedupe        map[string]dedupeEntry
+	inflight      map[string]*inflightCall
 
 	grace          time.Duration
 	handlerTimeout time.Duration
@@ -61,6 +69,7 @@ func NewHub(opts Options) *Hub {
 		subsByPattern:  make(map[string]map[string]struct{}),
 		handlers:       make(map[string]HandlerFunc),
 		dedupe:         make(map[string]dedupeEntry),
+		inflight:       make(map[string]*inflightCall),
 		grace:          opts.Grace,
 		handlerTimeout: opts.HandlerTimeout,
 		dedupeTTL:      opts.DedupeTTL,
@@ -130,6 +139,17 @@ func (h *Hub) Delete(sessionID string) {
 	}
 }
 
+// DroppedTotal 返回全部会话因出站队列溢出累计丢弃的帧数（指标出口）。
+func (h *Hub) DroppedTotal() int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	var total int64
+	for _, sess := range h.sessions {
+		total += sess.Dropped()
+	}
+	return total
+}
+
 // Count 返回当前在线会话数。
 func (h *Hub) Count() int {
 	h.mu.RLock()
@@ -186,6 +206,8 @@ func (h *Hub) HandleInbound(sess *Session, msg protocol.Message) {
 
 func (h *Hub) handleRequest(sess *Session, req protocol.Message) {
 	key := sess.ID + "|" + req.ID
+
+	// 第一级：完成缓存。已执行完的请求直接回放缓存响应（幂等）。
 	if cached, ok := h.dedupeLookup(key); ok {
 		resp := cached
 		sess.Enqueue(&resp)
@@ -193,16 +215,54 @@ func (h *Hub) handleRequest(sess *Session, req protocol.Message) {
 		return
 	}
 
+	// 第二级：在途去重。第一个请求还在执行时，同 key 的重试不启动第二次执行，
+	// 而是登记为等待者，与首个请求共享同一次执行结果。
+	h.mu.Lock()
+	if call, ok := h.inflight[key]; ok {
+		h.mu.Unlock()
+		<-call.done
+		resp := call.resp
+		sess.Enqueue(&resp)
+		h.logger.Debug("request joined inflight", "sessionId", sess.ID, "requestId", req.ID)
+		return
+	}
+	call := &inflightCall{done: make(chan struct{})}
+	h.inflight[key] = call
+	h.mu.Unlock()
+
+	resp := h.executeRequest(sess, req)
+
+	// 先写完成缓存，再唤醒等待者：迟到的重试命中缓存，在途的等待者拿共享结果。
+	h.dedupeStore(key, resp)
+	call.resp = resp
+	close(call.done)
+	h.mu.Lock()
+	delete(h.inflight, key)
+	h.mu.Unlock()
+
+	sess.Enqueue(&resp)
+}
+
+// executeRequest 真正执行一次业务处理器并组装响应帧（不含任何去重逻辑）。
+func (h *Hub) executeRequest(sess *Session, req protocol.Message) protocol.Message {
 	h.mu.RLock()
 	fn, ok := h.handlers[req.Topic]
 	h.mu.RUnlock()
 	if !ok {
-		h.send(sess, protocol.TypeRes, req.Topic, req.ID, nil, &protocol.MessageError{
-			Code:      protocol.CodeUnknownTopic,
-			Message:   "no handler for topic: " + req.Topic,
-			Retryable: false,
-		})
-		return
+		return protocol.Message{
+			Type:    protocol.TypeRes,
+			ID:      protocol.NewID(),
+			TS:      time.Now().UnixMilli(),
+			Payload: protocol.MarshalPayload(nil),
+			Error: &protocol.MessageError{
+				Code:      protocol.CodeUnknownTopic,
+				Message:   "no handler for topic: " + req.Topic,
+				Retryable: false,
+			},
+			Topic:     req.Topic,
+			SessionID: sess.ID,
+			ReplyTo:   req.ID,
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), h.handlerTimeout)
@@ -241,8 +301,7 @@ func (h *Hub) handleRequest(sess *Session, req protocol.Message) {
 		SessionID: sess.ID,
 		ReplyTo:   req.ID,
 	}
-	h.dedupeStore(key, resp)
-	sess.Enqueue(&resp)
+	return resp
 }
 
 // Publish 向所有订阅了该主题的会话推送事件，返回实际投递的会话数。

@@ -1,5 +1,8 @@
 import type { Message } from "@basestation/protocol";
 
+import { browserHost } from "./host.js";
+import type { CoreHost } from "./host.js";
+
 export interface PendingSpec {
   id: string;
   topic: string;
@@ -14,13 +17,15 @@ interface Entry {
   spec: PendingSpec;
 }
 
-/** 请求挂起表：按 replyTo 结算 Promise。 */
+/** 请求挂起表：按 replyTo 结算 Promise。定时器经宿主接口，不直用全局。 */
 export class PendingTable {
   private readonly entries = new Map<string, Entry>();
 
+  constructor(private readonly host: CoreHost = browserHost) {}
+
   add(spec: PendingSpec): void {
     this.remove(spec.id);
-    const timer = setTimeout(() => {
+    const timer = this.host.setTimeout(() => {
       this.entries.delete(spec.id);
       spec.onTimeout();
     }, spec.timeoutMs);
@@ -34,7 +39,7 @@ export class PendingTable {
   settle(id: string, msg: Message): boolean {
     const entry = this.entries.get(id);
     if (!entry) return false;
-    clearTimeout(entry.timer);
+    this.host.clearTimeout(entry.timer);
     this.entries.delete(id);
     entry.spec.onSettle(msg);
     return true;
@@ -43,7 +48,7 @@ export class PendingTable {
   remove(id: string): void {
     const entry = this.entries.get(id);
     if (!entry) return;
-    clearTimeout(entry.timer);
+    this.host.clearTimeout(entry.timer);
     this.entries.delete(id);
   }
 
@@ -56,7 +61,7 @@ export class PendingTable {
     const entries = [...this.entries.values()];
     this.entries.clear();
     for (const entry of entries) {
-      clearTimeout(entry.timer);
+      this.host.clearTimeout(entry.timer);
       entry.spec.onAbandon(err);
     }
   }

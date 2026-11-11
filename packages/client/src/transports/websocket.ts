@@ -2,6 +2,8 @@ import { isMessage, MessageType } from "@basestation/protocol";
 import type { Message } from "@basestation/protocol";
 
 import { ConnectionError } from "../errors.js";
+import { browserHost } from "../host.js";
+import type { CoreHost } from "../host.js";
 import type { CloseReason, Transport, TransportInfo } from "../types.js";
 
 const HELLO_TIMEOUT_MS = 3000;
@@ -27,7 +29,8 @@ export class WebSocketTransport implements Transport {
   constructor(
     private readonly url: string,
     sessionId: string | null,
-    private readonly WebSocketImpl: typeof WebSocket = globalThis.WebSocket,
+    private readonly WebSocketImpl: typeof WebSocket = browserHost.WebSocket,
+    private readonly host: CoreHost = browserHost,
   ) {
     this.sessionId = sessionId;
   }
@@ -57,7 +60,7 @@ export class WebSocketTransport implements Transport {
       }
       this.ws = socket;
 
-      this.helloTimeout = setTimeout(() => {
+      this.helloTimeout = this.host.setTimeout(() => {
         if (this.helloInfo) return;
         this.stopped = true;
         this.failHello(new ConnectionError(`websocket hello timeout after ${HELLO_TIMEOUT_MS}ms`));
@@ -162,7 +165,7 @@ export class WebSocketTransport implements Transport {
 
   private clearHelloTimeout(): void {
     if (this.helloTimeout) {
-      clearTimeout(this.helloTimeout);
+      this.host.clearTimeout(this.helloTimeout);
       this.helloTimeout = null;
     }
   }

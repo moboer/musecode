@@ -289,6 +289,23 @@ describe("BaseStationClient 订阅与隔离", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it("seq 跳号时触发 onSeqGap 告警且不中断投递", async () => {
+    const factory = new MockFactory();
+    const gaps: unknown[] = [];
+    const client = makeClient(factory, { onSeqGap: (info: unknown) => gaps.push(info) });
+    await client.connect();
+
+    const handler = vi.fn();
+    client.subscribe("metrics.cpu", handler);
+
+    factory.ws.receive(frame({ type: "event", topic: "metrics.cpu", seq: 10, payload: { value: 1 } }));
+    factory.ws.receive(frame({ type: "event", topic: "metrics.cpu", seq: 13, payload: { value: 2 } }));
+    factory.ws.receive(frame({ type: "event", topic: "metrics.cpu", seq: 14, payload: { value: 3 } }));
+
+    expect(handler).toHaveBeenCalledTimes(3);
+    expect(gaps).toEqual([{ expected: 11, received: 13, missed: 2 }]);
+  });
 });
 
 describe("BaseStationClient 单一连接与降级", () => {

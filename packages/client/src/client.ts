@@ -2,6 +2,8 @@ import { createMessage, ErrorCode, MessageType, newId } from "@basestation/proto
 import type { Message } from "@basestation/protocol";
 
 import { BaseStationError, ConnectionError, RequestError, TimeoutError } from "./errors.js";
+import { browserHost } from "./host.js";
+import type { CoreHost } from "./host.js";
 import { MessageBus } from "./message-bus.js";
 import type { BusEntry } from "./message-bus.js";
 import { PendingTable } from "./pending.js";
@@ -17,6 +19,7 @@ import type {
   OnceOptions,
   ReconnectOptions,
   RequestOptions,
+  SeqGapInfo,
   StateChangeInfo,
   SubscribeOptions,
   Transport,
@@ -36,6 +39,7 @@ interface ResolvedOptions {
   wsUpgradeProbeMs: number;
   sessionStorageKey: string | false;
   reconnect: Required<ReconnectOptions>;
+  onSeqGap?: (info: SeqGapInfo) => void;
   logger?: (level: LogLevel, event: string, meta?: unknown) => void;
 }
 
@@ -55,11 +59,12 @@ interface SubRecord {
 export class BaseStationClient implements IBaseStationClient {
   private readonly opts: ResolvedOptions;
   private readonly factory: TransportFactory;
+  private readonly host: CoreHost;
+  private readonly pending: PendingTable;
 
   private readonly bus = new MessageBus((err, entry) => {
     this.log("error", "subscription_handler_failed", { topic: entry.topic, error: String(err) });
   });
-  private readonly pending = new PendingTable();
   private readonly subs = new Map<string, SubRecord>();
   private readonly stateListeners = new Set<(state: ClientState, info: StateChangeInfo) => void>();
   private readonly trafficListeners = new Set<(msg: Message, dir: "in" | "out") => void>();
@@ -106,15 +111,19 @@ export class BaseStationClient implements IBaseStationClient {
         factor: reconnect.factor ?? 2,
         jitterRatio: reconnect.jitterRatio ?? 0.2,
       },
+      onSeqGap: options.onSeqGap,
       logger: options.logger,
     };
+    this.host = options.host ?? browserHost;
+    this.pending = new PendingTable(this.host);
     this.heartbeatInterval = this.opts.heartbeatIntervalMs;
     this._sessionId = this.readStoredSession();
     this.factory =
       options.transportFactory ??
       {
-        createWebSocket: () => new WebSocketTransport(this.opts.url, this._sessionId),
-        createPolling: () => new PollingTransport(this.opts.url, this._sessionId, this.opts.pollWaitMs),
+        createWebSocket: () => new WebSocketTransport(this.opts.url, this._sessionId, this.host.WebSocket, this.host),
+        createPolling: () =>
+          new PollingTransport(this.opts.url, this._sessionId, this.opts.pollWaitMs, this.host.fetch, this.host),
       };
   }
 
@@ -288,11 +297,7 @@ export class BaseStationClient implements IBaseStationClient {
     this.lastSeq = 0;
     const key = this.opts.sessionStorageKey;
     if (!key) return;
-    try {
-      globalThis.localStorage?.removeItem(key);
-    } catch {
-      // 隐私模式等场景下忽略
-    }
+    this.host.storage?.removeItem(key);
   }
 
   private async recoverToPoll(): Promise<void> {
@@ -324,7 +329,7 @@ export class BaseStationClient implements IBaseStationClient {
     const delay = Math.max(0, raw - jitter + Math.random() * jitter * 2);
 
     this.log("info", "reconnect_scheduled", { attempt: attempt + 1, delayMs: Math.round(delay) });
-    this.reconnectTimer = setTimeout(() => {
+    this.reconnectTimer = this.host.setTimeout(() => {
       this.reconnectTimer = null;
       void this.reconnectOnce();
     }, delay);
@@ -356,7 +361,7 @@ export class BaseStationClient implements IBaseStationClient {
 
   private clearReconnect(): void {
     if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
+      this.host.clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
   }
@@ -375,7 +380,7 @@ export class BaseStationClient implements IBaseStationClient {
   private startHeartbeat(): void {
     this.stopHeartbeat();
     if (this._transportKind !== "ws") return;
-    this.heartbeatTimer = setInterval(() => this.heartbeatTick(), this.heartbeatInterval);
+    this.heartbeatTimer = this.host.setInterval(() => this.heartbeatTick(), this.heartbeatInterval);
   }
 
   private heartbeatTick(): void {
@@ -383,7 +388,7 @@ export class BaseStationClient implements IBaseStationClient {
     this.heartbeatPending = true;
     this.rawSend(createMessage(MessageType.Ping));
 
-    this.heartbeatDeadline = setTimeout(() => {
+    this.heartbeatDeadline = this.host.setTimeout(() => {
       if (!this.heartbeatPending) return;
       this.heartbeatPending = false;
       this.log("warn", "heartbeat_lost", { timeoutMs: this.opts.heartbeatTimeoutMs });
@@ -394,7 +399,7 @@ export class BaseStationClient implements IBaseStationClient {
 
   private clearHeartbeatDeadline(): void {
     if (this.heartbeatDeadline) {
-      clearTimeout(this.heartbeatDeadline);
+      this.host.clearTimeout(this.heartbeatDeadline);
       this.heartbeatDeadline = null;
     }
     this.heartbeatPending = false;
@@ -402,7 +407,7 @@ export class BaseStationClient implements IBaseStationClient {
 
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
+      this.host.clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
     this.clearHeartbeatDeadline();
@@ -413,14 +418,14 @@ export class BaseStationClient implements IBaseStationClient {
   private startUpgradeProbe(): void {
     this.stopUpgradeProbe();
     if (this.opts.transport !== "auto") return;
-    this.upgradeTimer = setInterval(() => {
+    this.upgradeTimer = this.host.setInterval(() => {
       void this.tryUpgrade();
     }, this.opts.wsUpgradeProbeMs);
   }
 
   private stopUpgradeProbe(): void {
     if (this.upgradeTimer) {
-      clearInterval(this.upgradeTimer);
+      this.host.clearInterval(this.upgradeTimer);
       this.upgradeTimer = null;
     }
   }
@@ -430,7 +435,7 @@ export class BaseStationClient implements IBaseStationClient {
    * 若当前已是轮询，则只屏蔽后续升级尝试。
    */
   forceDegrade(durationMs = 15000): void {
-    this.upgradeSuppressedUntil = Date.now() + Math.max(0, durationMs);
+    this.upgradeSuppressedUntil = this.host.now() + Math.max(0, durationMs);
     this.stopUpgradeProbe();
     if (this._transportKind !== "ws") return;
 
@@ -451,7 +456,7 @@ export class BaseStationClient implements IBaseStationClient {
 
   private async tryUpgrade(): Promise<void> {
     if (this.manualClose || this._state !== "degraded" || this._transportKind !== "poll") return;
-    if (Date.now() < this.upgradeSuppressedUntil) return;
+    if (this.host.now() < this.upgradeSuppressedUntil) return;
     this.log("debug", "ws_upgrade_attempt");
     try {
       await this.switchTo("ws");
@@ -476,8 +481,23 @@ export class BaseStationClient implements IBaseStationClient {
     this.emitTraffic(msg, "in");
 
     // seq 去重：切换传输后可能重复投递，只保留最新。
+    // seq 缺口检测：跳号说明中间帧已被丢弃（如服务端出站队列溢出），必须可感知：
+    // 记 warn 日志并回调 onSeqGap，业务可据此告警或发起补拉。
     if (typeof msg.seq === "number" && msg.seq > 0) {
       if (msg.seq <= this.lastSeq) return;
+      if (this.lastSeq > 0 && msg.seq > this.lastSeq + 1) {
+        const gap: SeqGapInfo = {
+          expected: this.lastSeq + 1,
+          received: msg.seq,
+          missed: msg.seq - this.lastSeq - 1,
+        };
+        this.log("warn", "seq_gap", gap);
+        try {
+          this.opts.onSeqGap?.(gap);
+        } catch (err) {
+          this.log("error", "seq_gap_listener_failed", String(err));
+        }
+      }
       this.lastSeq = msg.seq;
     }
 
@@ -561,7 +581,7 @@ export class BaseStationClient implements IBaseStationClient {
             if (remaining > 0) {
               remaining -= 1;
               this.log("debug", "request_retry", { topic, id: message.id, remaining });
-              setTimeout(attempt, retryDelayMs);
+              this.host.setTimeout(attempt, retryDelayMs);
               return;
             }
             settled = true;
@@ -637,7 +657,7 @@ export class BaseStationClient implements IBaseStationClient {
         if (settled) return;
         settled = true;
         if (timer) {
-          clearTimeout(timer);
+          this.host.clearTimeout(timer);
           timer = null;
         }
         void subscription?.unsubscribe();
@@ -647,7 +667,7 @@ export class BaseStationClient implements IBaseStationClient {
       subscription = this.subscribe<T>(topic, (_payload, msg) => {
         finish(() => resolve(msg));
       });
-      timer = setTimeout(() => {
+      timer = this.host.setTimeout(() => {
         finish(() => reject(new TimeoutError(topic, timeoutMs)));
       }, timeoutMs);
     });
@@ -695,21 +715,13 @@ export class BaseStationClient implements IBaseStationClient {
   private readStoredSession(): string | null {
     const key = this.opts.sessionStorageKey;
     if (!key) return null;
-    try {
-      return globalThis.localStorage?.getItem(key) ?? null;
-    } catch {
-      return null;
-    }
+    return this.host.storage?.getItem(key) ?? null;
   }
 
   private persistSession(sessionId: string): void {
     const key = this.opts.sessionStorageKey;
     if (!key) return;
-    try {
-      globalThis.localStorage?.setItem(key, sessionId);
-    } catch {
-      // 隐私模式等场景下忽略
-    }
+    this.host.storage?.setItem(key, sessionId);
   }
 
   private log(level: LogLevel, event: string, meta?: unknown): void {
