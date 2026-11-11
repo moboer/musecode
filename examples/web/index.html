@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>基站通信演示 · 单一连接 + 按需订阅</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">BS</div>
+        <div>
+          <h1>Base Station 通信演示</h1>
+          <p>全页一条连接 · 组件按需订阅 · 消息互不串流</p>
+        </div>
+      </div>
+      <div id="connection-panel" class="connection"></div>
+    </header>
+
+    <main class="grid">
+      <section id="request-panel" class="panel"></section>
+      <section id="metrics-panel" class="panel"></section>
+      <section id="news-panel" class="panel"></section>
+      <section id="traffic-log" class="panel panel--log"></section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

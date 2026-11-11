@@ -1,0 +1,7 @@
+node_modules/
+dist/
+server/bin/
+*.log
+.DS_Store
+.vite/
+coverage/

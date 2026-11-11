@@ -1,0 +1,29 @@
+{
+  "name": "basestation-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "基站模式 + 按需订阅的前后端通信机制（Go 基站 + TypeScript 客户端 SDK）",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "go -C server run ./cmd/basestation",
+    "dev:web": "npm -w examples/web run dev",
+    "build": "tsc -b && npm -w examples/web run build",
+    "typecheck": "tsc -b && npm -w examples/web run typecheck",
+    "test": "vitest run && npm run test:server",
+    "test:server": "go -C server test ./..."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
