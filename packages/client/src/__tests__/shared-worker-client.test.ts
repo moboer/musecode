@@ -80,6 +80,44 @@ describe("SharedWorkerClient（页面 stub）", () => {
     client.disconnect();
   });
 
+  it("connect 前订阅会在连接时补发给 worker", async () => {
+    vi.stubGlobal("SharedWorker", FakeSharedWorker);
+    const client = new SharedWorkerClient({ url: "http://localhost:8080", workerUrl: "worker.js" });
+    const seen: unknown[] = [];
+    client.subscribe("metrics.mem", (payload) => seen.push(payload)); // 先订阅，此时还没有 port
+    const done = client.connect();
+    const port = FakeSharedWorker.lastPort!;
+    expect(port.sent[0]?.kind).toBe("init");
+    const subMsg = port.sent.find((m) => m.kind === "sub") as Extract<PortRequest, { kind: "sub" }>;
+    expect(subMsg.topic).toBe("metrics.mem");
+    port.emit({ kind: "state", state: "connected" });
+    await done;
+    port.emit({ kind: "event", subId: subMsg.subId, topic: "metrics.mem", payload: { value: 9 } });
+    expect(seen).toEqual([{ value: 9 }]);
+    client.disconnect();
+  });
+
+  it("传入预构造 worker 时不再自行构造 SharedWorker", async () => {
+    vi.stubGlobal(
+      "SharedWorker",
+      class {
+        constructor() {
+          throw new Error("不应被构造");
+        }
+      },
+    );
+    const fake = new FakeSharedWorker();
+    const client = new SharedWorkerClient({
+      url: "http://localhost:8080",
+      worker: fake as unknown as SharedWorker,
+    });
+    const done = client.connect();
+    fake.port.emit({ kind: "state", state: "connected" });
+    await expect(done).resolves.toBeUndefined();
+    expect(client.state).toBe("connected");
+    client.disconnect();
+  });
+
   it("disconnect 发送 bye 并关 port", () => {
     const { client, port } = makeClient() as unknown as { client: SharedWorkerClient; port: FakePort };
     client.disconnect();

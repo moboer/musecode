@@ -3,7 +3,8 @@
     "baseUrl": ".",
     "paths": {
       "@basestation/protocol": ["./packages/protocol/src/index.ts"],
-      "@basestation/client": ["./packages/client/src/index.ts"]
+      "@basestation/client": ["./packages/client/src/index.ts"],
+      "@basestation/client/hosts/worker-entry": ["./packages/client/src/hosts/worker-entry.ts"]
     },
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],

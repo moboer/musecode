@@ -495,15 +495,20 @@ useSubscription<MetricsCpuPayload>(Topics.MetricsCpu, (payload) => {
 ```ts
 import { createBestClient } from "@basestation/client";
 
-const bs = createBestClient({
-  url: "http://localhost:8080",
-  token,
-  // worker 脚本：@basestation/client 的构建产物 dist/hosts/worker-entry.js，
-  // 也可以用打包器 import workerUrl from "@basestation/client/dist/hosts/worker-entry.js?url"
-  workerUrl: "/assets/worker-entry.js",
-});
+// 推荐：用打包器的标准写法先构造 SharedWorker（脚本打包/转译归 Vite/webpack 管），再把实例传进来。
+// worker 入口已声明为包的子路径导出：@basestation/client/hosts/worker-entry
+const worker = new SharedWorker(
+  new URL("@basestation/client/hosts/worker-entry", import.meta.url),
+  { type: "module", name: "basestation" },
+);
+const bs = createBestClient({ url: "http://localhost:8080", token, worker });
 await bs.connect();
+
+// 或者直接给脚本地址（适合无打包器、直接引用构建产物的场景）：
+// const bs = createBestClient({ url, token, workerUrl: "/assets/worker-entry.js" });
 ```
+
+注意：`SharedWorkerClient` 的订阅可以在 `connect()` 之前注册（组件先挂载很常见），连接时会统一补发给 worker；连接等待带 10 秒超时，worker 脚本加载失败会明确报错而不是一直卡在 connecting。
 
 - 支持 SharedWorker 的浏览器：真实客户端跑在 worker 里，页面只是 stub；订阅按主题做引用计数（多标签订同一主题只占一份真实订阅、事件扇出），标签关闭（bye 或 15 秒心跳超时）后其订阅自动清理，无残留。
 - 不支持时（或没传 `workerUrl`）：`createBestClient` 自动降级为普通 `BaseStationClient`（每标签一条连接），业务代码无感。

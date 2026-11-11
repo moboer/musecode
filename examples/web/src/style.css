@@ -549,3 +549,60 @@ pre.result[data-ok="false"] {
     justify-content: flex-start;
   }
 }
+
+/* ---- v2.0 展台 ---- */
+.section-title {
+  max-width: 1200px;
+  margin: 28px auto 0;
+  padding: 0 20px;
+  font-size: 20px;
+}
+.topic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.topic-table th,
+.topic-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line, #e5e7eb);
+}
+.topic-table code {
+  font-size: 12px;
+}
+.wc-value {
+  font-size: 15px;
+  margin: 8px 0;
+}
+.wc-value bs-subscribe {
+  font-weight: 600;
+}
+.wc-log {
+  background: #0f172a;
+  color: #a5f3fc;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  min-height: 20px;
+}
+.auth-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  line-height: 1.9;
+  font-size: 14px;
+}
+.auth-steps li.ok {
+  color: #15803d;
+}
+.auth-steps li.fail {
+  color: #b91c1c;
+}
+.sw-status {
+  font-size: 14px;
+}
+.sw-value {
+  font-size: 15px;
+}

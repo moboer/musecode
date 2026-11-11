@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./hosts/worker-entry": {
+      "types": "./dist/hosts/worker-entry.d.ts",
+      "default": "./dist/hosts/worker-entry.js"
     }
   },
   "dependencies": {

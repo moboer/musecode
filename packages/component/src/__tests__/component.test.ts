@@ -40,6 +40,22 @@ beforeAll(() => {
 });
 
 describe("Web Component 标准组件", () => {
+  it("innerHTML 声明式挂载只建连一次（升级时属性回调不重复 setup）", async () => {
+    let factoryCalls = 0;
+    const counting = new MockClient();
+    componentInternals.clientFactory = () => {
+      factoryCalls++;
+      return counting;
+    };
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<base-station url="http://localhost:8080" token="T"></base-station>`;
+    document.body.appendChild(wrap);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(factoryCalls).toBe(1);
+    wrap.remove();
+    componentInternals.clientFactory = () => mock;
+  });
+
   it("<bs-subscribe> 收到消息后派发 bs-message 并在 show 时渲染文本", async () => {
     document.body.innerHTML = `
       <base-station url="http://localhost:8080">

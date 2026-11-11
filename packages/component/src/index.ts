@@ -41,6 +41,7 @@ export class BaseStationElement extends HTMLElement {
   private clientInstance: ComponentClient | null = null;
   private readyPromise: Promise<ComponentClient> | null = null;
   private offState: (() => void) | null = null;
+  private setupDone = false;
 
   /** 当前客户端（连接中/已连接时非空）。 */
   get client(): ComponentClient | null {
@@ -62,18 +63,21 @@ export class BaseStationElement extends HTMLElement {
   }
 
   attributeChangedCallback(): void {
-    if (this.isConnected) {
-      this.teardown();
-      this.setup();
-    }
+    // 元素升级时属性回调先于 connectedCallback 触发、且 isConnected 已为 true，
+    // 初始属性统一在 setup() 里读，这里只处理"建连之后"的属性变更，避免重复建连。
+    if (!this.setupDone) return;
+    this.teardown();
+    this.setup();
   }
 
   private setup(): void {
+    if (this.clientInstance) return;
     const url = this.getAttribute("url");
     if (!url) {
       this.dispatchEvent(new CustomEvent("bs-error", { bubbles: true, detail: { message: "<base-station> requires a url attribute" } }));
       return;
     }
+    this.setupDone = true;
     const token = this.getAttribute("token") ?? undefined;
     const client = componentInternals.clientFactory({ url, token, sessionStorageKey: false });
     this.clientInstance = client;
@@ -92,6 +96,7 @@ export class BaseStationElement extends HTMLElement {
     this.clientInstance?.disconnect();
     this.clientInstance = null;
     this.readyPromise = null;
+    this.setupDone = false;
   }
 }
 

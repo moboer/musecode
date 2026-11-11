@@ -29,8 +29,15 @@ import type {
 import type { PortEvent, PortRequest } from "./worker-protocol.js";
 
 export interface SharedWorkerClientOptions extends BaseStationOptions {
-  /** worker 脚本地址（构建产物 dist/hosts/worker-entry.js，或由打包器产出的 URL） */
-  workerUrl: string | URL;
+  /** worker 脚本地址（构建产物 dist/hosts/worker-entry.js，或由打包器产出的 URL）。与 worker 二选一。 */
+  workerUrl?: string | URL;
+  /**
+   * 预先构造好的 SharedWorker 实例（优先于 workerUrl）。
+   * 用打包器的标准写法构造后传入：
+   * `new SharedWorker(new URL("./entry.ts", import.meta.url), { type: "module" })`，
+   * worker 脚本的打包/转译交给 Vite/webpack，避免运行时直接加载未构建的源文件。
+   */
+  worker?: SharedWorker;
 }
 
 interface PendingRequest {
@@ -54,6 +61,8 @@ export class SharedWorkerClient implements IBaseStationClient {
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private counter = 0;
   private connectResolve: (() => void) | null = null;
+  private connectReject: ((err: unknown) => void) | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: SharedWorkerClientOptions) {
     this.options = options;
@@ -81,17 +90,56 @@ export class SharedWorkerClient implements IBaseStationClient {
 
   connect(): Promise<void> {
     if (this.port) return Promise.resolve();
-    const worker = new SharedWorker(this.options.workerUrl, { name: "basestation" });
+    let worker: SharedWorker;
+    if (this.options.worker) {
+      worker = this.options.worker;
+    } else if (this.options.workerUrl) {
+      worker = new SharedWorker(this.options.workerUrl, { type: "module", name: "basestation" });
+    } else {
+      return Promise.reject(new Error("SharedWorkerClient 需要 workerUrl 或 worker 之一"));
+    }
     this.worker = worker;
     this.port = worker.port;
     worker.port.onmessage = (ev: MessageEvent<PortEvent>) => this.handleEvent(ev.data);
+    (worker as unknown as { onerror: ((ev: ErrorEvent) => void) | null }).onerror = (ev) => {
+      this.failConnect(new ConnectionError(`SharedWorker 脚本出错：${ev.message || "加载或执行失败"}`));
+    };
     worker.port.start();
     this.setState("connecting");
     this.post({ kind: "init", url: this.options.url, token: this.currentToken() });
+    // connect 之前就注册的订阅（组件先挂载、后连接很常见）在 port 就绪后补发，
+    // 与 BaseStationClient 的"先订阅后连接"行为保持一致。
+    for (const [subId, entry] of this.handlers) {
+      this.post({ kind: "sub", subId, topic: entry.topic });
+    }
     this.pingTimer = this.host.setInterval(() => this.post({ kind: "ping" }), PING_INTERVAL_MS);
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       this.connectResolve = resolve;
+      this.connectReject = reject;
+      // worker 脚本加载失败时不会有任何回帧，10 秒无状态变化即判失败，避免永远卡在 connecting。
+      this.connectTimer = this.host.setTimeout(() => {
+        this.failConnect(new ConnectionError("SharedWorker 无响应（脚本加载失败？请检查 worker 入口配置）"));
+      }, 10000);
     });
+  }
+
+  private failConnect(err: unknown): void {
+    const reject = this.connectReject;
+    this.connectResolve = null;
+    this.connectReject = null;
+    if (this.connectTimer) {
+      this.host.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    if (this.pingTimer) {
+      this.host.clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    this.port?.close();
+    this.port = null;
+    this.worker = null;
+    this.setState("closed");
+    reject?.(err);
   }
 
   disconnect(): void {
@@ -197,6 +245,11 @@ export class SharedWorkerClient implements IBaseStationClient {
     if (this.connectResolve && state !== "connecting" && state !== "idle") {
       this.connectResolve();
       this.connectResolve = null;
+      this.connectReject = null;
+      if (this.connectTimer) {
+        this.host.clearTimeout(this.connectTimer);
+        this.connectTimer = null;
+      }
     }
   }
 
@@ -246,10 +299,10 @@ export class SharedWorkerClient implements IBaseStationClient {
  * 否则降级为页面内 BaseStationClient（每标签一条连接，功能不受影响）。
  */
 export function createBestClient(
-  options: BaseStationOptions & { workerUrl?: string | URL },
+  options: BaseStationOptions & { workerUrl?: string | URL; worker?: SharedWorker },
 ): IBaseStationClient & { connect(): Promise<void>; disconnect(): void } {
-  if (options.workerUrl && SharedWorkerClient.isSupported()) {
-    return new SharedWorkerClient({ ...options, workerUrl: options.workerUrl });
+  if ((options.workerUrl || options.worker) && SharedWorkerClient.isSupported()) {
+    return new SharedWorkerClient({ ...options, workerUrl: options.workerUrl, worker: options.worker });
   }
   return new BaseStationClient(options);
 }

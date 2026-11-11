@@ -4,6 +4,12 @@ import { mountConnectionPanel } from "./components/connection-panel";
 import { mountMetricsPanel } from "./components/metrics-panel";
 import { mountNewsPanel } from "./components/news-panel";
 import { mountRequestPanel } from "./components/request-panel";
+import {
+  mountAuthPanel,
+  mountComponentPanel,
+  mountRegistryPanel,
+  mountSharedWorkerPanel,
+} from "./components/showcase-panels";
 import { mountTrafficLog } from "./components/traffic-log";
 import "./style.css";
 
@@ -36,6 +42,10 @@ mountRequestPanel(requireMount("#request-panel"), bs);
 mountMetricsPanel(requireMount("#metrics-panel"), bs);
 mountNewsPanel(requireMount("#news-panel"), bs);
 mountTrafficLog(requireMount("#traffic-log"), bs);
+mountRegistryPanel(requireMount("#registry-panel"));
+mountComponentPanel(requireMount("#component-panel"));
+mountAuthPanel(requireMount("#auth-panel"));
+mountSharedWorkerPanel(requireMount("#shared-panel"));
 
 void client.connect().catch((err: unknown) => {
   console.error("[demo] 连接基站失败", err);
