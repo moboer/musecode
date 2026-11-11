@@ -12,6 +12,7 @@ export type {
   OnceOptions,
   ReconnectOptions,
   RequestOptions,
+  TokenProvider,
   SeqGapInfo,
   StateChangeInfo,
   SubscribeOptions,

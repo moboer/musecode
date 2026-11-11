@@ -81,7 +81,7 @@ npm run dev:web
 | `npm run dev:web` | 只启动 Vite 演示页 |
 | `npm run typecheck` | `tsc -b` + 演示页类型检查 |
 | `npm run build` | 构建 SDK 与演示页 |
-| `npm test` | Vitest 单元测试（23 个用例）+ `go test ./...`，克隆后开箱可跑、全绿 |
+| `npm test` | Vitest 单元测试（26 个用例）+ `go test ./...`，克隆后开箱可跑、全绿 |
 | `npm run test:server` | 仅 Go 测试 |
 | `npm run test:probe` | 活服务器探针（需先 `npm run dev`）：真实基站上的降级/续接联调，不在默认套件内 |
 | `npm run check:host` | 宿主纪律检查：core 不得直接引用 window/document/全局存储（见方案 v2 宿主接口） |
@@ -140,7 +140,24 @@ go -C server run ./cmd/basestation -addr :8080 -grace 30s -hb 15s -poll-wait 25s
 | `-poll-wait` | `25s` | 长轮询最大挂起时长 |
 | `-handler-timeout` | `10s` | 单请求处理器超时 |
 | `-cors` | `*` | 允许的 Origin，逗号分隔 |
+| `-auth-mode` | `none` | 鉴权模式：`none`（开发，不验令牌）/ `jwt`（全链路验证） |
+| `-auth-secret` | （环境变量 `BS_AUTH_SECRET`） | JWT 签名密钥，jwt 模式必填 |
+| `-dev-token` | `false` | 开启开发用令牌签发端点 `POST /api/auth/dev-token` |
+| `-max-conns-per-user` | `10` | 单用户最大会话数（jwt 模式），0 不限 |
+| `-rate-per-sec` | `0` | 默认发布/请求速率上限（条/秒/主题），令牌自带 `rate` 时以令牌为准 |
+
+## 安全与鉴权（jwt 模式）
+
+后端全链路验证，前端验过不算数（方案 v2 §6）：
+
+1. **令牌交换**：业务登录后向 `POST /api/auth/dev-token`（开发实现；生产替换为 IdP 令牌交换）换取短期 JWT，内含 `sub/tenant`、可订 `sub_acl`、可发 `pub_acl`、速率 `rate`。
+2. **建连验**：WS 经 `?token=`、轮询经 `Authorization: Bearer` 验签/有效期/吊销名单；续接必须**令牌主体与会话原主一致**，光有 `sessionId` 接管不了别人的会话；单用户连接数有上限。
+3. **订阅验**：每个 `sub` 做 ACL 子集判定（受限令牌订 `*` 会被拒）+ 私人命名空间 `user.{id}.*` 归属强制校验。
+4. **发布验**：每个 `req` 做 ACL 校验；信封 `tenant/sender` 由服务端按令牌**盖章覆写**，前端伪造无效；按用户×主题令牌桶限流，违规累计 5 次踢线。
+5. **吊销贯穿**：`POST /api/auth/revoke`（需 admin 令牌）吊销 jti 后，新连接被拒、存量会话立即踢除；令牌过期会话由回收器踢除。全程审计日志（`audit:` 前缀）。
+
+客户端：`new BaseStationClient({ url, token })` 或 `tokenProvider: () => currentToken()`（重连时自动取新令牌）。
 
 ## 范围说明
 
-本项目为机制演示，**不含鉴权**，CORS 默认放开；生产接入需要自行补充认证、TLS 与限流。
+默认 `none` 模式仅供本地开发演示（启动时有警告日志）；生产请开启 `-auth-mode=jwt` 并自行补充 TLS。事件扇出（`Publish`）的跨租户隔离目前靠订阅 ACL 在入口收口，注册表/字段级校验随标准组件阶段补齐。

@@ -3,7 +3,7 @@ import type { Message } from "@basestation/protocol";
 import { ConnectionError } from "../errors.js";
 import { browserHost } from "../host.js";
 import type { CoreHost } from "../host.js";
-import type { CloseReason, Transport, TransportInfo } from "../types.js";
+import type { CloseReason, TokenProvider, Transport, TransportInfo } from "../types.js";
 
 interface PollBody {
   messages?: Message[];
@@ -37,8 +37,15 @@ export class PollingTransport implements Transport {
     private pollWaitMs: number,
     private readonly fetchImpl: typeof fetch = browserHost.fetch,
     private readonly host: CoreHost = browserHost,
+    private readonly tokenProvider?: TokenProvider,
   ) {
     this.sessionId = sessionId;
+  }
+
+  /** 轮询经 Authorization 头带令牌（服务端第 2 关在建会话与每次 send/poll 时校验主体）。 */
+  private authHeaders(): Record<string, string> {
+    const token = this.tokenProvider?.();
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   onMessage(cb: (msg: Message) => void): void {
@@ -54,7 +61,7 @@ export class PollingTransport implements Transport {
     try {
       res = await this.fetchImpl(this.endpoint("/api/sessions"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...this.authHeaders() },
         body: JSON.stringify({ sessionId: this.sessionId ?? "" }),
       });
     } catch (err) {
@@ -119,7 +126,10 @@ export class PollingTransport implements Transport {
         const target = this.endpoint(
           `/api/sessions/${encodeURIComponent(this.sessionId ?? "")}/messages?waitMs=${this.pollWaitMs}&lastSeq=${this.lastSeq}`,
         );
-        const res = await this.fetchImpl(target, { signal: controller.signal, headers: { Accept: "application/json" } });
+        const res = await this.fetchImpl(target, {
+          signal: controller.signal,
+          headers: { Accept: "application/json", ...this.authHeaders() },
+        });
         if (!this.running) return;
         if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`);
 
@@ -163,7 +173,7 @@ export class PollingTransport implements Transport {
       const target = this.endpoint(`/api/sessions/${encodeURIComponent(this.sessionId ?? "")}/messages`);
       const res = await this.fetchImpl(target, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...this.authHeaders() },
         body: JSON.stringify({ messages: batch }),
       });
       if (!res.ok) throw new Error(`send failed: HTTP ${res.status}`);

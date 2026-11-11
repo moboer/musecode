@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"basestation/internal/auth"
 	"basestation/internal/protocol"
 )
 
@@ -26,6 +27,11 @@ type Session struct {
 	dropped  int64
 	wsID     int64
 	wsClose  func()
+
+	// owner 是建连时令牌的 Claims（鉴权开启时非 nil）。会话的权限判定全部以它为准，
+	// 续接时必须与它同主体——光有 sessionId 不能接管别人的会话。
+	owner      *auth.Claims
+	violations int
 
 	// sendMu 串行化出队，保证 seq 与 channel 中的顺序一致。
 	sendMu sync.Mutex
@@ -110,6 +116,39 @@ func (s *Session) Enqueue(msg *protocol.Message) {
 
 // Outbox 返回出站队列，供 WS 写泵或长轮询消费。
 func (s *Session) Outbox() <-chan *protocol.Message { return s.outbox }
+
+// SetOwner 绑定会话主体（建连验过令牌后调用一次）。
+func (s *Session) SetOwner(claims *auth.Claims) {
+	s.mu.Lock()
+	s.owner = claims
+	s.mu.Unlock()
+}
+
+// Owner 返回会话主体（未开启鉴权时为 nil）。
+func (s *Session) Owner() *auth.Claims {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owner
+}
+
+// AddViolation 累加一次违规（超限/越权尝试），返回累计次数。
+func (s *Session) AddViolation() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.violations++
+	return s.violations
+}
+
+// Kick 强制断开本会话的 WS 连接（若附着）并标记关闭，用于令牌过期/吊销/违规封禁。
+func (s *Session) Kick() {
+	s.mu.Lock()
+	closeFn := s.wsClose
+	s.closed = true
+	s.mu.Unlock()
+	if closeFn != nil {
+		closeFn()
+	}
+}
 
 // Touch 刷新活跃时间。
 func (s *Session) Touch() {

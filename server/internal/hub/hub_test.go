@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"basestation/internal/auth"
 	"basestation/internal/protocol"
 )
 
@@ -49,8 +50,8 @@ func collect(t *testing.T, sess *Session, want int, timeout time.Duration) []pro
 
 func TestPublishOnlyReachesSubscribers(t *testing.T) {
 	h := testHub()
-	metricsSess, _ := h.CreateOrResume("")
-	newsSess, _ := h.CreateOrResume("")
+	metricsSess, _, _ := h.CreateOrResume("", nil)
+	newsSess, _, _ := h.CreateOrResume("", nil)
 
 	sub(h, metricsSess, "metrics.*")
 	sub(h, newsSess, "news.notice")
@@ -81,7 +82,7 @@ func TestPublishOnlyReachesSubscribers(t *testing.T) {
 
 func TestUnsubscribeStopsDelivery(t *testing.T) {
 	h := testHub()
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 	sub(h, sess, "metrics.cpu")
 	collect(t, sess, 1, time.Second) // subok
 
@@ -99,7 +100,7 @@ func TestUnsubscribeStopsDelivery(t *testing.T) {
 
 func TestRequestHandlerAndDedupe(t *testing.T) {
 	h := testHub()
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 
 	var calls atomic.Int64
 	h.HandleRequest("echo", func(_ context.Context, _ *Session, r protocol.Message) (any, *protocol.MessageError) {
@@ -129,7 +130,7 @@ func TestRequestHandlerAndDedupe(t *testing.T) {
 
 func TestRequestInflightDedupe(t *testing.T) {
 	h := testHub()
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 
 	var calls atomic.Int64
 	release := make(chan struct{})
@@ -167,7 +168,7 @@ func TestRequestInflightDedupe(t *testing.T) {
 
 func TestUnknownTopic(t *testing.T) {
 	h := testHub()
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 	req(h, sess, "req-x", "does.not.exist")
 
 	res := collect(t, sess, 1, time.Second)[0]
@@ -178,7 +179,7 @@ func TestUnknownTopic(t *testing.T) {
 
 func TestHandlerTimeout(t *testing.T) {
 	h := testHub() // HandlerTimeout = 200ms
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 	h.HandleRequest("slow", func(ctx context.Context, _ *Session, _ protocol.Message) (any, *protocol.MessageError) {
 		<-ctx.Done()
 		return nil, &protocol.MessageError{Code: protocol.CodeTimeout, Message: "ctx done", Retryable: true}
@@ -193,7 +194,7 @@ func TestHandlerTimeout(t *testing.T) {
 
 func TestPingPongAndBadFrame(t *testing.T) {
 	h := testHub()
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 
 	ping := protocol.NewMessage(protocol.TypePing, "")
 	ping.ID = "ping-1"
@@ -213,13 +214,13 @@ func TestPingPongAndBadFrame(t *testing.T) {
 
 func TestSessionResumeKeepsSubscriptions(t *testing.T) {
 	h := testHub()
-	sess, resumed := h.CreateOrResume("")
+	sess, resumed, _ := h.CreateOrResume("", nil)
 	if resumed {
 		t.Fatal("new session should not be resumed")
 	}
 	sub(h, sess, "metrics.cpu")
 
-	again, resumed := h.CreateOrResume(sess.ID)
+	again, resumed, _ := h.CreateOrResume(sess.ID, nil)
 	if !resumed || again.ID != sess.ID {
 		t.Fatalf("resume failed: resumed=%v id=%s", resumed, again.ID)
 	}
@@ -235,7 +236,7 @@ func TestReapExpiredSessions(t *testing.T) {
 		DedupeTTL:      time.Minute,
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	sess, _ := h.CreateOrResume("")
+	sess, _, _ := h.CreateOrResume("", nil)
 	time.Sleep(20 * time.Millisecond)
 	h.reapExpired()
 
@@ -244,5 +245,119 @@ func TestReapExpiredSessions(t *testing.T) {
 	}
 	if h.Count() != 0 {
 		t.Fatalf("session count = %d", h.Count())
+	}
+}
+
+func ownerSession(t *testing.T, h *Hub, claims *auth.Claims) *Session {
+	t.Helper()
+	sess, _, err := h.CreateOrResume("", claims)
+	if err != nil {
+		t.Fatalf("create session with owner: %v", err)
+	}
+	return sess
+}
+
+func TestSubscribeACLAndPrivateTopic(t *testing.T) {
+	h := testHub()
+	alice := &auth.Claims{Sub: "alice", Tenant: "t1", Subscribe: []string{"metrics.*"}, Publish: []string{"echo"}}
+	sess := ownerSession(t, h, alice)
+
+	// 允许的订阅
+	h.HandleInbound(sess, protocol.NewMessage(protocol.TypeSub, "metrics.*"))
+	msgs := collect(t, sess, 1, time.Second)
+	if msgs[0].Type != protocol.TypeSubOK {
+		t.Fatalf("metrics.* should be allowed, got %+v", msgs[0])
+	}
+
+	// 超出 ACL 的订阅（订 * 拿全部）必须被拒——评估时的实锤洞
+	h.HandleInbound(sess, protocol.NewMessage(protocol.TypeSub, "*"))
+	msgs = collect(t, sess, 1, time.Second)
+	if msgs[0].Type != protocol.TypeError || msgs[0].Error == nil || msgs[0].Error.Code != protocol.CodeForbidden {
+		t.Fatalf("subscribe * should be forbidden, got %+v", msgs[0])
+	}
+
+	// 他人私人命名空间必须被拒
+	h.HandleInbound(sess, protocol.NewMessage(protocol.TypeSub, "user.bob.*"))
+	msgs = collect(t, sess, 1, time.Second)
+	if msgs[0].Error == nil || msgs[0].Error.Code != protocol.CodeForbidden {
+		t.Fatalf("subscribe user.bob.* should be forbidden, got %+v", msgs[0])
+	}
+	if len(sess.Subscriptions()) != 1 {
+		t.Fatalf("only the allowed subscription should exist, got %v", sess.Subscriptions())
+	}
+}
+
+func TestRequestACLStampAndRateLimit(t *testing.T) {
+	h := testHub()
+	called := 0
+	var seenSender, seenTenant string
+	h.HandleRequest("echo", func(_ context.Context, _ *Session, req protocol.Message) (any, *protocol.MessageError) {
+		called++
+		seenSender, seenTenant = req.Sender, req.Tenant
+		return map[string]any{"ok": true}, nil
+	})
+	carol := &auth.Claims{Sub: "carol", Tenant: "t9", Publish: []string{"echo"}, RatePerSec: 1}
+	sess := ownerSession(t, h, carol)
+
+	doReq := func(topic, forgedTenant string) protocol.Message {
+		req := protocol.NewMessage(protocol.TypeReq, topic)
+		req.Tenant = forgedTenant
+		h.HandleInbound(sess, req)
+		// req 在 goroutine 中处理，轮询等待 res 帧
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case msg := <-sess.Outbox():
+				if msg.Type == protocol.TypeRes && msg.ReplyTo == req.ID {
+					return *msg
+				}
+			case <-deadline:
+				t.Fatalf("timeout waiting res for %s", topic)
+				return protocol.Message{}
+			}
+		}
+	}
+
+	// 合法请求：处理器只应被调一次，且看到的 tenant/sender 是令牌盖章值而非伪造值
+	res := doReq("echo", "evil-tenant")
+	if res.Error != nil {
+		t.Fatalf("echo should succeed, got %+v", res.Error)
+	}
+	if called != 1 || seenTenant != "t9" || seenSender != "carol" {
+		t.Fatalf("stamp wrong: called=%d tenant=%q sender=%q", called, seenTenant, seenSender)
+	}
+	if res.Tenant != "t9" || res.Sender != "carol" {
+		t.Fatalf("response stamp wrong: %+v", res)
+	}
+
+	// 无权主题：FORBIDDEN 且不进处理器
+	res = doReq("device.command", "")
+	if res.Error == nil || res.Error.Code != protocol.CodeForbidden {
+		t.Fatalf("device.command should be forbidden, got %+v", res)
+	}
+	if called != 1 {
+		t.Fatalf("forbidden request reached handler")
+	}
+
+	// 限流：rate=1/s、burst=1，第一条刚消耗掉令牌，紧接第二条应被 RATE_LIMITED
+	res = doReq("echo", "")
+	if res.Error == nil || res.Error.Code != protocol.CodeRateLimited {
+		t.Fatalf("second immediate request should be rate limited, got %+v", res)
+	}
+	if called != 1 {
+		t.Fatalf("rate limited request reached handler")
+	}
+}
+
+func TestResumeOwnerMismatch(t *testing.T) {
+	h := testHub()
+	alice := &auth.Claims{Sub: "alice", Tenant: "t1"}
+	sess := ownerSession(t, h, alice)
+
+	if _, _, err := h.CreateOrResume(sess.ID, &auth.Claims{Sub: "mallory", Tenant: "t1"}); err != ErrOwnerMismatch {
+		t.Fatalf("resume by another subject should fail, got %v", err)
+	}
+	if _, resumed, err := h.CreateOrResume(sess.ID, alice); err != nil || !resumed {
+		t.Fatalf("resume by owner should succeed: resumed=%v err=%v", resumed, err)
 	}
 }

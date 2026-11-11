@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"basestation/internal/auth"
 	"basestation/internal/hub"
 )
 
@@ -20,14 +21,25 @@ type Config struct {
 	PollWait    time.Duration
 	CORSOrigins []string
 	Version     string
+
+	// AuthMode: "none"（默认，开发模式，不验令牌） | "jwt"（全链路验证，方案 v2 §6）
+	AuthMode string
+	// AuthSecret 是 JWT(HS256) 签名密钥，AuthMode=jwt 时必填。
+	AuthSecret string
+	// DevToken 开启开发用令牌签发端点 /api/auth/dev-token（仅供联调/演示，生产应由 IdP 交换签发）。
+	DevToken bool
+	// MaxConnsPerUser 单用户最大会话数（第 2 关），0 表示不限。
+	MaxConnsPerUser int
 }
 
 // Server 组装所有 HTTP 路由。
 type Server struct {
-	hub    *hub.Hub
-	cfg    Config
-	logger *slog.Logger
-	wsSeq  atomic.Int64
+	hub      *hub.Hub
+	cfg      Config
+	logger   *slog.Logger
+	wsSeq    atomic.Int64
+	signer   *auth.Signer
+	verifier *auth.Verifier
 }
 
 // New 创建传输层服务。
@@ -44,8 +56,16 @@ func New(h *hub.Hub, cfg Config, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Server{hub: h, cfg: cfg, logger: logger}
+	s := &Server{hub: h, cfg: cfg, logger: logger}
+	if cfg.AuthMode == "jwt" {
+		s.signer = auth.NewSigner(cfg.AuthSecret)
+		s.verifier = auth.NewVerifier(cfg.AuthSecret)
+	}
+	return s
 }
+
+// authEnabled 表示是否开启全链路验证。
+func (s *Server) authEnabled() bool { return s.verifier != nil }
 
 // Handler 返回带 CORS 的完整路由。
 func (s *Server) Handler() http.Handler {
@@ -56,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/messages", s.handleSend)
 	mux.HandleFunc("GET /api/sessions/{id}/messages", s.handlePoll)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("POST /api/auth/dev-token", s.handleDevToken)
+	mux.HandleFunc("POST /api/auth/revoke", s.handleRevoke)
 	return s.cors(mux)
 }
 
@@ -65,6 +87,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"version":      s.cfg.Version,
 		"sessions":     s.hub.Count(),
 		"droppedTotal": s.hub.DroppedTotal(),
+		"authMode":     s.cfg.AuthMode,
 		"uptimeMs":     s.hub.Uptime().Milliseconds(),
 		"modes":        []string{"ws", "poll"},
 		"serverTs":     time.Now().UnixMilli(),

@@ -13,7 +13,24 @@ import (
 
 // handleWS 升级为长连接。会话在升级后立即收到 hello，
 // 其中包含续接所需的心跳与轮询参数。
+// jwt 模式下升级前先过第 2 关：验令牌（头或 ?token=）、连接数上限；
+// 续接的主体一致性在 CreateOrResume 内校验，不过则升级后立即断开。
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	claims, err := s.authenticate(r)
+	if err != nil {
+		s.logger.Warn("audit: ws connect denied", "error", err)
+		s.writeAuthError(w, err)
+		return
+	}
+	sessionID := r.URL.Query().Get("sessionId")
+	_, isResume := s.hub.Get(sessionID)
+	if sessionID == "" {
+		isResume = false
+	}
+	if !s.checkConnLimit(w, claims, isResume) {
+		return
+	}
+
 	up := websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
@@ -27,7 +44,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, resumed := s.hub.CreateOrResume(r.URL.Query().Get("sessionId"))
+	sess, resumed, err := s.hub.CreateOrResume(sessionID, claims)
+	if err != nil {
+		s.logger.Warn("audit: ws resume denied", "error", err)
+		_ = conn.Close()
+		return
+	}
 
 	wsID := s.wsSeq.Add(1)
 	if prev := sess.BindWS(wsID, func() { _ = conn.Close() }); prev != nil {
@@ -35,13 +57,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// hello 走同一出站队列，保证与后续帧的顺序一致。
-	sess.Enqueue(&protocol.Message{
+	hello := &protocol.Message{
 		Type:      protocol.TypeHello,
 		ID:        protocol.NewID(),
 		TS:        time.Now().UnixMilli(),
 		Payload:   protocol.MarshalPayload(s.helloPayload(sess, resumed)),
 		SessionID: sess.ID,
-	})
+	}
+	if owner := sess.Owner(); owner != nil {
+		hello.Tenant, hello.Sender = owner.Tenant, owner.Sub
+	}
+	sess.Enqueue(hello)
 	s.logger.Info("ws attached", "sessionId", sess.ID, "resumed", resumed)
 
 	done := make(chan struct{})

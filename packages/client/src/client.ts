@@ -19,6 +19,7 @@ import type {
   OnceOptions,
   ReconnectOptions,
   RequestOptions,
+  TokenProvider,
   SeqGapInfo,
   StateChangeInfo,
   SubscribeOptions,
@@ -40,6 +41,7 @@ interface ResolvedOptions {
   sessionStorageKey: string | false;
   reconnect: Required<ReconnectOptions>;
   onSeqGap?: (info: SeqGapInfo) => void;
+  tokenProvider?: TokenProvider;
   logger?: (level: LogLevel, event: string, meta?: unknown) => void;
 }
 
@@ -112,6 +114,7 @@ export class BaseStationClient implements IBaseStationClient {
         jitterRatio: reconnect.jitterRatio ?? 0.2,
       },
       onSeqGap: options.onSeqGap,
+      tokenProvider: options.tokenProvider ?? (options.token ? () => options.token : undefined),
       logger: options.logger,
     };
     this.host = options.host ?? browserHost;
@@ -121,9 +124,17 @@ export class BaseStationClient implements IBaseStationClient {
     this.factory =
       options.transportFactory ??
       {
-        createWebSocket: () => new WebSocketTransport(this.opts.url, this._sessionId, this.host.WebSocket, this.host),
+        createWebSocket: () =>
+          new WebSocketTransport(this.opts.url, this._sessionId, this.host.WebSocket, this.host, this.opts.tokenProvider),
         createPolling: () =>
-          new PollingTransport(this.opts.url, this._sessionId, this.opts.pollWaitMs, this.host.fetch, this.host),
+          new PollingTransport(
+            this.opts.url,
+            this._sessionId,
+            this.opts.pollWaitMs,
+            this.host.fetch,
+            this.host,
+            this.opts.tokenProvider,
+          ),
       };
   }
 

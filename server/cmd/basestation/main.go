@@ -28,27 +28,52 @@ func main() {
 	cors := flag.String("cors", "*", "允许的 Origin，逗号分隔，* 表示全部")
 	version := flag.String("version", "1.0.0", "服务版本号")
 	logLevel := flag.String("log-level", "info", "日志级别：debug|info|warn|error")
+	authMode := flag.String("auth-mode", "none", "鉴权模式：none（开发，不验令牌）| jwt（全链路验证）")
+	authSecret := flag.String("auth-secret", "", "JWT 签名密钥（jwt 模式必填；也可经环境变量 BS_AUTH_SECRET）")
+	devToken := flag.Bool("dev-token", false, "开启开发用令牌签发端点 /api/auth/dev-token")
+	maxConns := flag.Int("max-conns-per-user", 10, "单用户最大会话数（jwt 模式），0 表示不限")
+	ratePerSec := flag.Float64("rate-per-sec", 0, "默认发布/请求速率上限（条/秒/主题），0 表示不限；令牌自带 rate 时以令牌为准")
 	flag.Parse()
 
 	logger := newLogger(*logLevel)
+
+	if *authSecret == "" {
+		*authSecret = os.Getenv("BS_AUTH_SECRET")
+	}
+	if *authMode != "none" && *authMode != "jwt" {
+		logger.Error("unknown -auth-mode", "value", *authMode)
+		os.Exit(2)
+	}
+	if *authMode == "jwt" && *authSecret == "" {
+		logger.Error("-auth-mode=jwt requires -auth-secret or BS_AUTH_SECRET")
+		os.Exit(2)
+	}
+	if *authMode == "none" {
+		logger.Warn("auth disabled (dev only): tokens are not verified; do not use in production")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	h := hub.NewHub(hub.Options{
-		Grace:          *grace,
-		HandlerTimeout: *handlerTimeout,
-		Logger:         logger,
+		Grace:             *grace,
+		HandlerTimeout:    *handlerTimeout,
+		Logger:            logger,
+		DefaultRatePerSec: *ratePerSec,
 	})
 	h.Start(ctx)
 	biz.Register(ctx, h, *version)
 
 	transport := httpx.New(h, httpx.Config{
-		Grace:       *grace,
-		Heartbeat:   *heartbeat,
-		PollWait:    *pollWait,
-		CORSOrigins: splitOrigins(*cors),
-		Version:     *version,
+		Grace:           *grace,
+		Heartbeat:       *heartbeat,
+		PollWait:        *pollWait,
+		CORSOrigins:     splitOrigins(*cors),
+		Version:         *version,
+		AuthMode:        *authMode,
+		AuthSecret:      *authSecret,
+		DevToken:        *devToken,
+		MaxConnsPerUser: *maxConns,
 	}, logger)
 
 	srv := &http.Server{

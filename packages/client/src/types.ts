@@ -10,6 +10,9 @@ export type CloseReason = "manual" | "heartbeat" | "network" | "server" | "switc
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/** 消息令牌提供者：返回当前有效令牌（无令牌时返回 null/undefined）。 */
+export type TokenProvider = () => string | null | undefined;
+
 /** 传输层启动后回填的会话信息，来自服务端的 hello / 会话接口。 */
 export interface TransportInfo {
   sessionId: string;
@@ -63,6 +66,13 @@ export interface BaseStationOptions {
   host?: CoreHost;
   /** 入站 seq 出现缺口（中间帧被丢弃）时的告警出口；同时也会记 warn 日志 */
   onSeqGap?: (info: SeqGapInfo) => void;
+  /**
+   * 消息令牌（服务端 -auth-mode=jwt 时必带）：由业务登录态向基站令牌端点交换得到，
+   * 决定可订阅/可发布的 topic 与速率配额。WS 经 ?token= 传递，轮询经 Authorization 头。
+   */
+  token?: string;
+  /** 令牌提供者：每次（重）连时调用，令牌过期刷新后自动生效；优先于 token */
+  tokenProvider?: TokenProvider;
   logger?: (level: LogLevel, event: string, meta?: unknown) => void;
 }
 

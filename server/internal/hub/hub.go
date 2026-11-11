@@ -3,12 +3,18 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
+	"basestation/internal/auth"
 	"basestation/internal/protocol"
 )
+
+// ErrOwnerMismatch 表示续接会话时令牌主体与会话原主不一致（第 2 关）。
+var ErrOwnerMismatch = errors.New("session owner mismatch")
 
 // HandlerFunc 是业务请求处理器。业务模块只依赖该签名与 Hub，
 // 不感知底层是 WS 还是 HTTP 轮询。
@@ -20,6 +26,9 @@ type Options struct {
 	HandlerTimeout time.Duration // 单请求处理超时
 	DedupeTTL      time.Duration // 请求幂等缓存存活时间
 	Logger         *slog.Logger
+
+	// DefaultRatePerSec 是令牌未自带速率配额时的服务端默认发布/请求速率（条/秒），0 表示不限。
+	DefaultRatePerSec float64
 }
 
 type dedupeEntry struct {
@@ -48,6 +57,9 @@ type Hub struct {
 	dedupeTTL      time.Duration
 	logger         *slog.Logger
 	startedAt      time.Time
+
+	defaultRate float64
+	limiter     *auth.RateLimiter
 }
 
 // NewHub 创建基站中枢。
@@ -75,6 +87,8 @@ func NewHub(opts Options) *Hub {
 		dedupeTTL:      opts.DedupeTTL,
 		logger:         opts.Logger,
 		startedAt:      time.Now(),
+		defaultRate:    opts.DefaultRatePerSec,
+		limiter:        auth.NewRateLimiter(),
 	}
 }
 
@@ -86,18 +100,26 @@ func (h *Hub) HandleRequest(topic string, fn HandlerFunc) {
 }
 
 // CreateOrResume 创建或续接会话。sessionID 不存在时按新会话处理。
-func (h *Hub) CreateOrResume(sessionID string) (*Session, bool) {
+// owner 为建连令牌 Claims（鉴权关闭时传 nil）。续接已有会话时若双方 owner 都存在
+// 且主体（sub/tenant）不一致，返回 ErrOwnerMismatch——sessionId 不是凭证（第 2 关）。
+func (h *Hub) CreateOrResume(sessionID string, owner *auth.Claims) (*Session, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if sessionID != "" {
 		if sess, ok := h.sessions[sessionID]; ok && !sess.Closed() {
+			if existing := sess.Owner(); existing != nil && owner != nil &&
+				(existing.Sub != owner.Sub || existing.Tenant != owner.Tenant) {
+				h.logger.Warn("audit: session resume denied (owner mismatch)",
+					"sessionId", sessionID, "owner", existing.Sub, "requester", owner.Sub)
+				return nil, false, ErrOwnerMismatch
+			}
 			sess.Touch()
 			// 会话复用时把既有订阅重新写入索引，保证中途重建索引也一致。
 			for _, pattern := range sess.Subscriptions() {
 				h.indexSubscribeLocked(sess.ID, pattern)
 			}
-			return sess, true
+			return sess, true, nil
 		}
 	}
 
@@ -106,9 +128,43 @@ func (h *Hub) CreateOrResume(sessionID string) (*Session, bool) {
 		id = protocol.NewID()
 	}
 	sess := NewSession(id)
+	if owner != nil {
+		sess.SetOwner(owner)
+	}
 	h.sessions[id] = sess
 	h.logger.Info("session created", "sessionId", id)
-	return sess, false
+	return sess, false, nil
+}
+
+// CountByOwner 返回某主体当前持有的会话数（第 2 关连接数上限用）。
+func (h *Hub) CountByOwner(sub string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	count := 0
+	for _, sess := range h.sessions {
+		if owner := sess.Owner(); owner != nil && owner.Sub == sub {
+			count++
+		}
+	}
+	return count
+}
+
+// KickByJTI 踢除持有指定令牌的全部会话（吊销贯穿机制），返回踢除数量。
+func (h *Hub) KickByJTI(jti string) int {
+	h.mu.RLock()
+	var targets []*Session
+	for _, sess := range h.sessions {
+		if owner := sess.Owner(); owner != nil && owner.JTI == jti {
+			targets = append(targets, sess)
+		}
+	}
+	h.mu.RUnlock()
+	for _, sess := range targets {
+		h.Delete(sess.ID)
+		sess.Kick()
+		h.logger.Warn("audit: session kicked (token revoked)", "sessionId", sess.ID, "jti", jti)
+	}
+	return len(targets)
 }
 
 // Get 按 ID 取会话。
@@ -175,6 +231,20 @@ func (h *Hub) HandleInbound(sess *Session, msg protocol.Message) {
 		h.send(sess, protocol.TypePong, "", msg.ID, map[string]any{"ts": time.Now().UnixMilli()}, nil)
 
 	case protocol.TypeSub:
+		// 第 3 关：订阅验证。私人命名空间归属强制校验 + ACL 子集判定，默认拒绝并审计。
+		if owner := sess.Owner(); owner != nil {
+			if auth.ViolatesPrivateTopic(msg.Topic, owner.Sub) || !auth.CanSubscribe(owner.Subscribe, msg.Topic) {
+				sess.AddViolation()
+				h.logger.Warn("audit: subscribe denied",
+					"sessionId", sess.ID, "sub", owner.Sub, "topic", msg.Topic)
+				h.send(sess, protocol.TypeError, msg.Topic, msg.ID, nil, &protocol.MessageError{
+					Code:      protocol.CodeForbidden,
+					Message:   "subscribe not allowed for topic: " + msg.Topic,
+					Retryable: false,
+				})
+				return
+			}
+		}
 		added := sess.Subscribe(msg.Topic)
 		if added {
 			h.mu.Lock()
@@ -193,6 +263,43 @@ func (h *Hub) HandleInbound(sess *Session, msg protocol.Message) {
 		h.send(sess, protocol.TypeUnsubOK, msg.Topic, msg.ID, map[string]any{"topic": msg.Topic, "removed": removed}, nil)
 
 	case protocol.TypeReq:
+		// 第 4 关：身份盖章 + 发布验证 + 限流执法（都在进处理器之前）。
+		owner := sess.Owner()
+		// 盖章：信封 tenant/sender 以会话令牌为准，前端填入的值直接覆写丢弃。
+		msg.Tenant, msg.Sender = "", ""
+		if owner != nil {
+			msg.Tenant, msg.Sender = owner.Tenant, owner.Sub
+			if !auth.CanPublish(owner.Publish, msg.Topic) {
+				sess.AddViolation()
+				h.logger.Warn("audit: request denied (acl)",
+					"sessionId", sess.ID, "sub", owner.Sub, "topic", msg.Topic)
+				h.send(sess, protocol.TypeRes, msg.Topic, msg.ID, nil, &protocol.MessageError{
+					Code:      protocol.CodeForbidden,
+					Message:   "publish not allowed for topic: " + msg.Topic,
+					Retryable: false,
+				})
+				return
+			}
+		}
+		if rate := h.effectiveRate(owner); rate > 0 {
+			burst := math.Max(1, math.Ceil(rate))
+			if !h.limiter.Allow(sess.ID+"|"+msg.Topic, rate, burst, time.Now()) {
+				violations := sess.AddViolation()
+				h.logger.Warn("audit: request rate limited",
+					"sessionId", sess.ID, "topic", msg.Topic, "violations", violations)
+				h.send(sess, protocol.TypeRes, msg.Topic, msg.ID, nil, &protocol.MessageError{
+					Code:      protocol.CodeRateLimited,
+					Message:   "rate limit exceeded for topic: " + msg.Topic,
+					Retryable: true,
+				})
+				if violations >= 5 {
+					h.logger.Warn("audit: session kicked (repeated violations)", "sessionId", sess.ID)
+					h.Delete(sess.ID)
+					sess.Kick()
+				}
+				return
+			}
+		}
 		go h.handleRequest(sess, msg)
 
 	default:
@@ -231,6 +338,10 @@ func (h *Hub) handleRequest(sess *Session, req protocol.Message) {
 	h.mu.Unlock()
 
 	resp := h.executeRequest(sess, req)
+	// 响应盖章：与请求同一主体口径。
+	if owner := sess.Owner(); owner != nil {
+		resp.Tenant, resp.Sender = owner.Tenant, owner.Sub
+	}
 
 	// 先写完成缓存，再唤醒等待者：迟到的重试命中缓存，在途的等待者拿共享结果。
 	h.dedupeStore(key, resp)
@@ -360,6 +471,14 @@ func (h *Hub) SendError(sess *Session, replyTo string, mErr *protocol.MessageErr
 	h.send(sess, protocol.TypeError, "", replyTo, nil, mErr)
 }
 
+// effectiveRate 计算某会话的发布/请求速率：令牌自带配额优先，否则用服务端默认；<=0 表示不限。
+func (h *Hub) effectiveRate(owner *auth.Claims) float64 {
+	if owner != nil && owner.RatePerSec > 0 {
+		return owner.RatePerSec
+	}
+	return h.defaultRate
+}
+
 func (h *Hub) send(sess *Session, typ, topic, replyTo string, payload any, mErr *protocol.MessageError) {
 	msg := protocol.Message{
 		Type:      typ,
@@ -370,6 +489,9 @@ func (h *Hub) send(sess *Session, typ, topic, replyTo string, payload any, mErr 
 		Topic:     topic,
 		SessionID: sess.ID,
 		ReplyTo:   replyTo,
+	}
+	if owner := sess.Owner(); owner != nil {
+		msg.Tenant, msg.Sender = owner.Tenant, owner.Sub
 	}
 	sess.Enqueue(&msg)
 }
@@ -399,7 +521,13 @@ func (h *Hub) reapExpired() {
 
 	h.mu.RLock()
 	expired := make([]string, 0)
+	tokenExpired := make([]*Session, 0)
 	for id, sess := range h.sessions {
+		// 令牌过期：无论是否活跃都踢除（第 2 关的持续执法，过期令牌不能靠保活续命）。
+		if owner := sess.Owner(); owner != nil && owner.ExpiresAt > 0 && now.Unix() > owner.ExpiresAt {
+			tokenExpired = append(tokenExpired, sess)
+			continue
+		}
 		if sess.WSAttached() {
 			continue
 		}
@@ -411,6 +539,11 @@ func (h *Hub) reapExpired() {
 
 	for _, id := range expired {
 		h.Delete(id)
+	}
+	for _, sess := range tokenExpired {
+		h.logger.Warn("audit: session kicked (token expired)", "sessionId", sess.ID)
+		h.Delete(sess.ID)
+		sess.Kick()
 	}
 }
 

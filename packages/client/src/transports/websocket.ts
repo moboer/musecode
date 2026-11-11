@@ -4,7 +4,7 @@ import type { Message } from "@basestation/protocol";
 import { ConnectionError } from "../errors.js";
 import { browserHost } from "../host.js";
 import type { CoreHost } from "../host.js";
-import type { CloseReason, Transport, TransportInfo } from "../types.js";
+import type { CloseReason, TokenProvider, Transport, TransportInfo } from "../types.js";
 
 const HELLO_TIMEOUT_MS = 3000;
 
@@ -31,6 +31,7 @@ export class WebSocketTransport implements Transport {
     sessionId: string | null,
     private readonly WebSocketImpl: typeof WebSocket = browserHost.WebSocket,
     private readonly host: CoreHost = browserHost,
+    private readonly tokenProvider?: TokenProvider,
   ) {
     this.sessionId = sessionId;
   }
@@ -48,7 +49,7 @@ export class WebSocketTransport implements Transport {
       this.helloResolve = resolve;
       this.helloReject = reject;
 
-      const target = toWsUrl(this.url, this.sessionId);
+      const target = toWsUrl(this.url, this.sessionId, this.tokenProvider?.() ?? null);
       let socket: WebSocket;
       try {
         socket = new this.WebSocketImpl(target);
@@ -178,7 +179,7 @@ export class WebSocketTransport implements Transport {
   }
 }
 
-function toWsUrl(baseUrl: string, sessionId: string | null): string {
+function toWsUrl(baseUrl: string, sessionId: string | null, token: string | null): string {
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -187,7 +188,11 @@ function toWsUrl(baseUrl: string, sessionId: string | null): string {
   }
   url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
   url.pathname = "/ws";
-  url.search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
+  // 浏览器 WebSocket 不能设请求头，令牌经 query 传递（服务端第 2 关校验）。
+  const params = new URLSearchParams();
+  if (sessionId) params.set("sessionId", sessionId);
+  if (token) params.set("token", token);
+  url.search = params.toString() ? `?${params.toString()}` : "";
   url.hash = "";
   return url.toString();
 }

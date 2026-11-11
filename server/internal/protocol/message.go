@@ -35,6 +35,9 @@ const (
 	CodeTransportUnavailable = "TRANSPORT_UNAVAILABLE"
 	CodeNotSubscribed        = "NOT_SUBSCRIBED"
 	CodeInternal             = "INTERNAL"
+	CodeUnauthorized         = "UNAUTHORIZED"
+	CodeForbidden            = "FORBIDDEN"
+	CodeRateLimited          = "RATE_LIMITED"
 )
 
 // MessageError 是信封中的错误字段。无论成功与否该字段都必须存在，成功时为 null。
@@ -60,6 +63,10 @@ type Message struct {
 	SessionID string `json:"sessionId,omitempty"`
 	ReplyTo   string `json:"replyTo,omitempty"`
 	Seq       int64  `json:"seq,omitempty"`
+
+	// Tenant / Sender 由基站按会话令牌盖章覆写，前端填入的值一律不被信任（方案 v2 第 4 关）。
+	Tenant string `json:"tenant,omitempty"`
+	Sender string `json:"sender,omitempty"`
 }
 
 // NewMessage 构造一个信封，自动填充 id、ts 与空 payload。
@@ -166,6 +173,8 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		SessionID string          `json:"sessionId,omitempty"`
 		ReplyTo   string          `json:"replyTo,omitempty"`
 		Seq       int64           `json:"seq,omitempty"`
+		Tenant    string          `json:"tenant,omitempty"`
+		Sender    string          `json:"sender,omitempty"`
 	}
 	payload := m.Payload
 	if len(payload) == 0 || string(payload) == "null" {
@@ -181,6 +190,8 @@ func (m Message) MarshalJSON() ([]byte, error) {
 		SessionID: m.SessionID,
 		ReplyTo:   m.ReplyTo,
 		Seq:       m.Seq,
+		Tenant:    m.Tenant,
+		Sender:    m.Sender,
 	})
 }
 

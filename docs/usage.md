@@ -367,3 +367,47 @@ go func() {
 ```ts
 bs.subscribe("order.*", (payload) => renderOrder(payload));
 ```
+
+## 11. 安全与鉴权（jwt 模式）
+
+服务端以 `-auth-mode=jwt -auth-secret=<密钥>` 启动后，前端不带令牌连不上、验过前端也不算数，一切以服务端复核为准。
+
+### 11.1 拿令牌（第 1 关）
+
+开发环境用签发端点换令牌（启动需带 `-dev-token`；生产环境替换为校验 IdP 登录令牌的交换端点，客户端用法不变）：
+
+```bash
+curl -X POST localhost:8080/api/auth/dev-token -d '{
+  "sub": "alice", "tenant": "t1",
+  "subscribe": ["metrics.*", "user.alice.*"],
+  "publish": ["echo"],
+  "ratePerSec": 20,
+  "ttlSeconds": 600
+}'
+# → { "token": "...", "jti": "...", "expiresAt": ... }
+```
+
+### 11.2 客户端带令牌
+
+```ts
+const bs = new BaseStationClient({
+  url: "http://localhost:8080",
+  // 静态令牌，或用 tokenProvider 在每次（重）连时取最新令牌（推荐，便于刷新）
+  tokenProvider: () => authStore.messageToken,
+});
+```
+
+WS 经 `?token=` 传递，轮询经 `Authorization: Bearer` 头，客户端自动处理，业务代码无感。
+
+### 11.3 会被拒的情形（均有服务端审计日志）
+
+| 情形 | 结果 |
+|---|---|
+| 无令牌 / 过期 / 被吊销的令牌建连 | HTTP 401 |
+| 拿别人的 `sessionId` + 自己的令牌续接 | HTTP 403，会话不被接管 |
+| 订阅超出 `sub_acl`（如受限令牌订 `*`） | `error` 帧 `FORBIDDEN`，订阅不生效 |
+| 订阅 `user.{他人}.*` 私人主题 | `error` 帧 `FORBIDDEN`（与 ACL 无关，强制校验） |
+| 请求不在 `pub_acl` 的主题 | `res` 帧 `FORBIDDEN`，不进处理器 |
+| 信封里伪造 `tenant/sender` | 被服务端按令牌盖章覆写，处理器只看到真实主体 |
+| 超过 `rate` 狂发 | `res` 帧 `RATE_LIMITED`；累计违规 5 次断开会话 |
+| 令牌被 admin 吊销（`POST /api/auth/revoke`） | 存量会话立即踢除，新连接 401 |

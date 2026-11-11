@@ -26,13 +26,36 @@ type pollResponse struct {
 }
 
 // handleCreateSession 创建或续接轮询会话。
+// jwt 模式下先过第 2 关：令牌（Authorization 头或 body.token）校验、连接数上限、续接主体一致。
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionID string `json:"sessionId"`
+		Token     string `json:"token"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
 
-	sess, resumed := s.hub.CreateOrResume(body.SessionID)
+	claims, err := s.authenticate(r)
+	if err != nil && body.Token != "" && s.authEnabled() {
+		claims, err = s.verifier.Verify(body.Token)
+	}
+	if err != nil {
+		s.logger.Warn("audit: poll session denied", "error", err)
+		s.writeAuthError(w, err)
+		return
+	}
+	_, isResume := s.hub.Get(body.SessionID)
+	if body.SessionID == "" {
+		isResume = false
+	}
+	if !s.checkConnLimit(w, claims, isResume) {
+		return
+	}
+
+	sess, resumed, err := s.hub.CreateOrResume(body.SessionID, claims)
+	if err != nil {
+		s.writeAuthError(w, err)
+		return
+	}
 	sess.Touch()
 
 	writeJSON(w, http.StatusOK, createSessionResponse{
@@ -47,6 +70,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteSession 主动关闭会话。
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if sess, ok := s.hub.Get(r.PathValue("id")); ok {
+		if !s.checkSessionOwner(w, r, sess) {
+			return
+		}
+	}
 	s.hub.Delete(r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -57,6 +85,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.hub.Get(id)
 	if !ok {
 		s.writeSessionNotFound(w, id)
+		return
+	}
+	if !s.checkSessionOwner(w, r, sess) {
 		return
 	}
 
@@ -89,12 +120,18 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		s.writeSessionNotFound(w, id)
 		return
 	}
+	if !s.checkSessionOwner(w, r, sess) {
+		return
+	}
 
 	lastSeq, _ := strconv.ParseInt(r.URL.Query().Get("lastSeq"), 10, 64)
-	waitMs, _ := strconv.ParseInt(r.URL.Query().Get("waitMs"), 10, 64)
 	wait := s.cfg.PollWait
-	if waitMs >= 0 && waitMs < 60000 {
-		wait = time.Duration(waitMs) * time.Millisecond
+	// 只有显式传了 waitMs 才覆写默认等待；缺省时用配置值（此前缺省被解析成 0，
+	// 导致不带该参数的轮询永远立刻超时、连已排队帧都读不到）。
+	if raw := r.URL.Query().Get("waitMs"); raw != "" {
+		if waitMs, err := strconv.ParseInt(raw, 10, 64); err == nil && waitMs >= 0 && waitMs < 60000 {
+			wait = time.Duration(waitMs) * time.Millisecond
+		}
 	}
 
 	// 轮询本身就是心跳。

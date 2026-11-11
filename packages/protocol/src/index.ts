@@ -29,6 +29,9 @@ export const ErrorCode = {
   TransportUnavailable: "TRANSPORT_UNAVAILABLE",
   NotSubscribed: "NOT_SUBSCRIBED",
   Internal: "INTERNAL",
+  Unauthorized: "UNAUTHORIZED",
+  Forbidden: "FORBIDDEN",
+  RateLimited: "RATE_LIMITED",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -61,6 +64,10 @@ export interface Message<T = unknown> {
   replyTo?: string;
   /** 基站 → 客户端单调递增序号，用于跨传输去重 */
   seq?: number;
+  /** 租户：由基站按会话令牌盖章，前端填入不被信任 */
+  tenant?: string;
+  /** 发送者（令牌 sub）：由基站盖章 */
+  sender?: string;
 }
 
 export interface CreateMessageInit<T> {
