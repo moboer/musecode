@@ -11,7 +11,13 @@
   },
   "dependencies": {
     "@basestation/client": "1.0.0",
-    "@basestation/protocol": "1.0.0"
+    "@basestation/protocol": "1.0.0",
+    "@basestation/component": "1.0.0",
+    "@basestation/react": "1.0.0",
+    "@basestation/vue": "1.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vue": "^3.5.0"
   },
   "devDependencies": {
     "vite": "^8.3.5"

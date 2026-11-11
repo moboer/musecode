@@ -606,3 +606,126 @@ pre.result[data-ok="false"] {
 .sw-value {
   font-size: 15px;
 }
+
+/* ---- 功能测试台 ---- */
+.bench-bar {
+  max-width: 1200px;
+  margin: 20px auto 0;
+  padding: 16px 20px;
+  background: var(--panel, #111827);
+  border: 1px solid var(--line, #1f2937);
+  border-radius: 12px;
+}
+.bench-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.bench-head p {
+  margin: 0 0 12px;
+  opacity: 0.75;
+  font-size: 13px;
+}
+.bench-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.bench-summary {
+  font-size: 14px;
+  font-weight: 600;
+}
+.bench-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bench-item {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line, #1f2937);
+  font-size: 13px;
+}
+.bench-item .bench-state {
+  flex: 0 0 52px;
+  font-weight: 700;
+}
+.bench-item[data-status="pass"] .bench-state {
+  color: #4ade80;
+}
+.bench-item[data-status="fail"] .bench-state {
+  color: #f87171;
+}
+.bench-item[data-status="running"] .bench-state {
+  color: #facc15;
+}
+.bench-item .bench-name {
+  flex: 0 0 300px;
+}
+.bench-item .bench-name em {
+  font-style: normal;
+  opacity: 0.55;
+  margin-right: 8px;
+  font-size: 12px;
+}
+.bench-item .bench-evidence {
+  flex: 1;
+  opacity: 0.85;
+  word-break: break-all;
+}
+.bench-item .bench-ms {
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+}
+.panel--wide {
+  grid-column: 1 / -1;
+}
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.lab-card {
+  border: 1px solid var(--line, #1f2937);
+  border-radius: 10px;
+  padding: 12px;
+}
+.lab-card[data-status="pass"] {
+  border-color: #166534;
+}
+.lab-card[data-status="fail"] {
+  border-color: #7f1d1d;
+}
+.lab-title {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+.lab-result {
+  margin-top: 8px;
+  font-size: 13px;
+  opacity: 0.9;
+  word-break: break-all;
+}
+.session-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.timeline {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.8;
+  opacity: 0.9;
+}
+.framework-value {
+  font-size: 17px;
+}
+.conn-select select {
+  margin-left: 6px;
+}

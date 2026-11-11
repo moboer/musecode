@@ -252,3 +252,28 @@ func TestExpiredTokenRejected(t *testing.T) {
 		t.Fatalf("expired token should be 401, got %d", code)
 	}
 }
+
+// TestCORSPreflightAllowsAuthorization 回归：浏览器带 Authorization 头的跨源请求
+// （吊销端点、jwt 模式下长轮询的 fetch）会先发预检，Allow-Headers 缺 Authorization
+// 时浏览器直接拦截（fetch 抛 Failed to fetch），Node 环境测不出来，必须单测钉住。
+func TestCORSPreflightAllowsAuthorization(t *testing.T) {
+	ts, _ := testServer(t, true)
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodOptions, ts.URL+"/api/auth/revoke", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "authorization, content-type")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	allow := resp.Header.Get("Access-Control-Allow-Headers")
+	if !strings.Contains(allow, "Authorization") {
+		t.Fatalf("预检 Allow-Headers 应包含 Authorization，实际 %q", allow)
+	}
+}

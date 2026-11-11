@@ -25,12 +25,26 @@ export function mountConnectionPanel(root: HTMLElement, bs: BaseStationClient): 
       <span class="conn-state" data-state-label>未连接</span>
       <span class="conn-meta" data-transport>传输 --</span>
       <span class="conn-meta" data-session>会话 --</span>
+      <label class="conn-select">初始传输
+        <select data-transport-select>
+          <option value="auto">自动（先 WS）</option>
+          <option value="ws">仅 WebSocket</option>
+          <option value="poll">仅长轮询</option>
+        </select>
+      </label>
       <button class="primary" data-action="connect">连接</button>
       <button data-action="disconnect">断开</button>
       <button class="ghost" data-action="degrade">强制降级 WS</button>
     </div>
     <div class="conn-reason" data-reason>页面级单例：全页共享这一条连接</div>
   `;
+
+  const transportSelect = query<HTMLSelectElement>(root, "[data-transport-select]");
+  transportSelect.value = localStorage.getItem("bs-demo-transport") ?? "auto";
+  transportSelect.addEventListener("change", () => {
+    localStorage.setItem("bs-demo-transport", transportSelect.value);
+    location.reload();
+  });
 
   const dot = query<HTMLSpanElement>(root, "[data-dot]");
   const stateLabel = query<HTMLElement>(root, "[data-state-label]");

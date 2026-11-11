@@ -8,6 +8,8 @@ const workerEntrySrc = fileURLToPath(
 );
 const protocolSrc = fileURLToPath(new URL("../../packages/protocol/src/index.ts", import.meta.url));
 const componentSrc = fileURLToPath(new URL("../../packages/component/src/index.ts", import.meta.url));
+const reactSrc = fileURLToPath(new URL("../../packages/react/src/index.tsx", import.meta.url));
+const vueSrc = fileURLToPath(new URL("../../packages/vue/src/index.ts", import.meta.url));
 
 export default defineConfig({
   resolve: {
@@ -17,6 +19,8 @@ export default defineConfig({
       { find: "@basestation/client", replacement: clientSrc },
       { find: "@basestation/protocol", replacement: protocolSrc },
       { find: "@basestation/component", replacement: componentSrc },
+      { find: "@basestation/react", replacement: reactSrc },
+      { find: "@basestation/vue", replacement: vueSrc },
     ],
   },
   server: {

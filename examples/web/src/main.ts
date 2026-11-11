@@ -1,28 +1,36 @@
 import { getBaseStation, initBaseStation } from "@basestation/client";
+import type { TransportKind } from "@basestation/client";
 
+import { mountAuthLab } from "./components/auth-lab";
 import { mountConnectionPanel } from "./components/connection-panel";
 import { mountMetricsPanel } from "./components/metrics-panel";
+import { mountMultiTabPanel } from "./components/multi-tab-panel";
 import { mountNewsPanel } from "./components/news-panel";
+import { mountReactPanel } from "./components/react-panel";
 import { mountRequestPanel } from "./components/request-panel";
-import {
-  mountAuthPanel,
-  mountComponentPanel,
-  mountRegistryPanel,
-  mountSharedWorkerPanel,
-} from "./components/showcase-panels";
+import { mountSessionPanel } from "./components/session-panel";
+import { mountComponentPanel, mountRegistryPanel } from "./components/showcase-panels";
+import { mountTestBench } from "./components/test-runner";
 import { mountTrafficLog } from "./components/traffic-log";
+import { mountVuePanel } from "./components/vue-panel";
+import type { TestCtx } from "./tests";
 import "./style.css";
 
 const debugLogs: string[] = [];
 (globalThis as unknown as { __bsLogs: string[] }).__bsLogs = debugLogs;
 
+const savedTransport = (localStorage.getItem("bs-demo-transport") ?? "auto") as
+  | TransportKind
+  | "auto";
+
 /**
  * 全页唯一的连接在这里创建一次，之后所有组件都通过 getBaseStation()
  * 拿到同一个实例 —— 组件之间不会、也不能各自建连。
+ * 初始传输可在连接面板切换（auto / ws / poll，切换后重载页面生效）。
  */
 const client = initBaseStation({
   url: window.location.origin,
-  transport: "auto",
+  transport: savedTransport,
   requestTimeoutMs: 5000,
   logger: (level, event, meta) => {
     const line = `[basestation] ${event}${meta ? ` ${safeJson(meta)}` : ""}`;
@@ -36,16 +44,21 @@ const client = initBaseStation({
 });
 
 const bs = getBaseStation();
+const ctx: TestCtx = { bs: client, jwtBase: "http://localhost:8081" };
 
 mountConnectionPanel(requireMount("#connection-panel"), client);
 mountRequestPanel(requireMount("#request-panel"), bs);
 mountMetricsPanel(requireMount("#metrics-panel"), bs);
 mountNewsPanel(requireMount("#news-panel"), bs);
 mountTrafficLog(requireMount("#traffic-log"), bs);
+mountSessionPanel(requireMount("#session-panel"), client);
 mountRegistryPanel(requireMount("#registry-panel"));
+mountAuthLab(requireMount("#auth-lab"), ctx);
 mountComponentPanel(requireMount("#component-panel"));
-mountAuthPanel(requireMount("#auth-panel"));
-mountSharedWorkerPanel(requireMount("#shared-panel"));
+mountReactPanel(requireMount("#react-panel"), bs);
+mountVuePanel(requireMount("#vue-panel"), bs);
+mountMultiTabPanel(requireMount("#shared-panel"));
+mountTestBench(ctx);
 
 void client.connect().catch((err: unknown) => {
   console.error("[demo] 连接基站失败", err);

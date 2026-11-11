@@ -53,7 +53,7 @@ server/                 Go 基站（独立 module，不参与 npm workspace）
   internal/registry/    注册表运行时与 payload 结构校验
   internal/transport/   WS 与长轮询端点
   internal/biz/         示例业务主题
-examples/web/           Vite + 原生 TS 演示页（5 个组件共享一条连接）
+examples/web/           Vite 功能测试台（全部功能可点测 + 一键全测，见下方"功能测试台"）
 docs/usage.md           使用示例文档（请求、订阅、鉴权、标准组件、多标签等）
 docs/learning-guide.md  初学者学习文档（概念、代码地图、动手练习）
 scripts/dev.mjs         并行拉起基站与演示页
@@ -94,6 +94,13 @@ npm run dev:web
 | `npm run test:probe` | 活服务器探针（需先 `npm run dev`）：真实基站上的降级/续接联调，不在默认套件内 |
 | `npm run gen:topics` | 按 `registry/topics.json` 重新生成双端注册表代码（改主题后必跑） |
 | `npm run check:host` | 宿主纪律检查：core 不得直接引用 window/document/全局存储（见方案 v2 宿主接口） |
+
+## 功能测试台
+
+演示页（`npm run dev` 打开 http://localhost:5173）已改版为功能测试台，所有能力都可在页面上验证：
+
+- **一键全测**：顶部按钮顺序执行 19 个功能用例（连接/echo/订阅/once/重试去重/降级续接/注册表校验/鉴权六关/Web Component/React/Vue/SharedWorker），每项给出通过与否、实测证据与耗时；
+- **分区点测**：基础通信（请求、订阅、流量日志）、连接与会话（状态时间线、health、初始传输切换）、鉴权实验室（六道关各一张卡，单独点测，连 :8081 jwt 实例——需另开 `npm run dev:server:jwt`）、标准组件四用法（Web Component / React / Vue / SharedWorker 多标签，含服务端会话数实时显示与"新开标签页"按钮）。
 
 ## 协议速览
 

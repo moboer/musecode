@@ -4,7 +4,10 @@
     "paths": {
       "@basestation/protocol": ["./packages/protocol/src/index.ts"],
       "@basestation/client": ["./packages/client/src/index.ts"],
-      "@basestation/client/hosts/worker-entry": ["./packages/client/src/hosts/worker-entry.ts"]
+      "@basestation/client/hosts/worker-entry": ["./packages/client/src/hosts/worker-entry.ts"],
+      "@basestation/react": ["./packages/react/src/index.tsx"],
+      "@basestation/vue": ["./packages/vue/src/index.ts"],
+      "@basestation/component": ["./packages/component/src/index.ts"]
     },
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
