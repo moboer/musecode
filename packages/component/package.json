@@ -1,0 +1,1 @@
+{"dependencies":{"@basestation/client":"1.0.0","@basestation/protocol":"1.0.0"},"devDependencies":{"jsdom":"^27.0.0"},"exports":{".":{"default":"./dist/index.js","types":"./dist/index.d.ts"}},"main":"./dist/index.js","name":"@basestation/component","private":true,"scripts":{"build":"tsc -b"},"type":"module","types":"./dist/index.d.ts","version":"1.0.0"}

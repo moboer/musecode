@@ -11,7 +11,7 @@ const FORBIDDEN = [
   { pattern: /\bdocument\s*\./, name: "document." },
   { pattern: /globalThis\.(localStorage|sessionStorage|WebSocket|fetch)\b/, name: "globalThis 存储/网络全局量" },
 ];
-const EXEMPT = new Set(["host.ts"]);
+const EXEMPT = new Set(["host.ts", "worker-host.ts"]); // 宿主实现文件本身是唯一允许直接引用环境的地方
 
 function* walk(dir) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {

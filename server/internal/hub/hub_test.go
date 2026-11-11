@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 
 	"basestation/internal/auth"
 	"basestation/internal/protocol"
+	"basestation/internal/registry"
 )
 
 func testHub() *Hub {
@@ -359,5 +361,48 @@ func TestResumeOwnerMismatch(t *testing.T) {
 	}
 	if _, resumed, err := h.CreateOrResume(sess.ID, alice); err != nil || !resumed {
 		t.Fatalf("resume by owner should succeed: resumed=%v err=%v", resumed, err)
+	}
+}
+
+func TestRegistryPayloadGate(t *testing.T) {
+	h := NewHub(Options{
+		Grace:          30 * time.Second,
+		HandlerTimeout: 2 * time.Second,
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Registry:       registry.Default(),
+	})
+	called := 0
+	h.HandleRequest("slow.echo", func(_ context.Context, _ *Session, _ protocol.Message) (any, *protocol.MessageError) {
+		called++
+		return map[string]any{"ok": true}, nil
+	})
+	sess, _, _ := h.CreateOrResume("", nil)
+
+	doReq := func(payload string) protocol.Message {
+		req := protocol.NewMessage(protocol.TypeReq, "slow.echo")
+		req.Payload = json.RawMessage(payload)
+		h.HandleInbound(sess, req)
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case msg := <-sess.Outbox():
+				if msg.Type == protocol.TypeRes && msg.ReplyTo == req.ID {
+					return *msg
+				}
+			case <-deadline:
+				t.Fatal("timeout waiting res")
+				return protocol.Message{}
+			}
+		}
+	}
+
+	if res := doReq(`{"delayMs":"soon"}`); res.Error == nil || res.Error.Code != protocol.CodeBadMessage {
+		t.Fatalf("wrong-typed payload should be BAD_MESSAGE, got %+v", res)
+	}
+	if called != 0 {
+		t.Fatal("invalid payload reached handler")
+	}
+	if res := doReq(`{"delayMs":100}`); res.Error != nil || called != 1 {
+		t.Fatalf("valid payload should pass: res=%+v called=%d", res, called)
 	}
 }

@@ -38,16 +38,24 @@
 ## 目录结构
 
 ```
-packages/protocol/      协议类型、错误码、主题匹配（前后端共享）
+packages/protocol/      协议类型、错误码、主题匹配 + 注册表生成代码 topics.ts（前后端共享）
 packages/client/        BaseStationClient、页面单例、消息总线、两种传输实现
+  src/hosts/            SharedWorker 宿主：worker 路由器、页面 stub 客户端、worker 入口
+packages/component/     Web Component 标准组件：<base-station> / <bs-subscribe>
+packages/react/         React 薄绑定：BaseStationProvider + useSubscription 等 hooks
+packages/vue/           Vue 3 薄绑定：插件 + useSubscription 等 composables
+registry/topics.json    Topic 注册表（唯一事实来源，npm run gen:topics 生成双端代码）
 server/                 Go 基站（独立 module，不参与 npm workspace）
   cmd/basestation/      启动入口与 flag
   internal/protocol/    消息信封与校验
   internal/hub/         会话、订阅倒排索引、路由、幂等缓存
+  internal/auth/        JWT 令牌校验、订阅/发布 ACL、令牌桶限流
+  internal/registry/    注册表运行时与 payload 结构校验
   internal/transport/   WS 与长轮询端点
   internal/biz/         示例业务主题
 examples/web/           Vite + 原生 TS 演示页（5 个组件共享一条连接）
-docs/usage.md           使用示例文档（请求、订阅、取消订阅、降级等）
+docs/usage.md           使用示例文档（请求、订阅、鉴权、标准组件、多标签等）
+docs/learning-guide.md  初学者学习文档（概念、代码地图、动手练习）
 scripts/dev.mjs         并行拉起基站与演示页
 ```
 
@@ -81,9 +89,10 @@ npm run dev:web
 | `npm run dev:web` | 只启动 Vite 演示页 |
 | `npm run typecheck` | `tsc -b` + 演示页类型检查 |
 | `npm run build` | 构建 SDK 与演示页 |
-| `npm test` | Vitest 单元测试（26 个用例）+ `go test ./...`，克隆后开箱可跑、全绿 |
+| `npm test` | Vitest 单元测试（39 个用例）+ `go test ./...`，克隆后开箱可跑、全绿 |
 | `npm run test:server` | 仅 Go 测试 |
 | `npm run test:probe` | 活服务器探针（需先 `npm run dev`）：真实基站上的降级/续接联调，不在默认套件内 |
+| `npm run gen:topics` | 按 `registry/topics.json` 重新生成双端注册表代码（改主题后必跑） |
 | `npm run check:host` | 宿主纪律检查：core 不得直接引用 window/document/全局存储（见方案 v2 宿主接口） |
 
 ## 协议速览
@@ -157,6 +166,15 @@ go -C server run ./cmd/basestation -addr :8080 -grace 30s -hb 15s -poll-wait 25s
 5. **吊销贯穿**：`POST /api/auth/revoke`（需 admin 令牌）吊销 jti 后，新连接被拒、存量会话立即踢除；令牌过期会话由回收器踢除。全程审计日志（`audit:` 前缀）。
 
 客户端：`new BaseStationClient({ url, token })` 或 `tokenProvider: () => currentToken()`（重连时自动取新令牌）。
+
+## 标准组件与多标签（v2.0-c）
+
+同一套 core，四种用法（细节见 `docs/usage.md` §12）：
+
+- **注册表**：主题只在 `registry/topics.json` 定义一次（方向、投递意图、payload 结构），`npm run gen:topics` 生成前端类型与服务端校验表；服务端对已注册主题的请求做 payload 结构校验。
+- **Web Component**（框架无关）：`<base-station url token>` + `<bs-subscribe topic show>`，消息以 `bs-message` 事件冒泡出来。
+- **React / Vue 薄绑定**：`@basestation/react` 的 Provider + `useSubscription`、`@basestation/vue` 的插件 + `useSubscription`，只桥接生命周期，不复制机制。
+- **SharedWorker 多标签单连接**：`createBestClient({ url, workerUrl })` 在支持的浏览器让同源全部标签共享 worker 里的一条连接（订阅引用计数、关标签自动清理），不支持时自动降级为页面内客户端。
 
 ## 范围说明
 

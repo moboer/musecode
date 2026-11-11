@@ -150,3 +150,5 @@ export function isResponse(msg: Message): boolean {
 export function isErrorFrame(msg: Message): boolean {
   return msg.type === MessageType.Error || msg.error !== null;
 }
+
+export * from "./topics.js";

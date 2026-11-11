@@ -11,6 +11,7 @@ import (
 
 	"basestation/internal/auth"
 	"basestation/internal/protocol"
+	"basestation/internal/registry"
 )
 
 // ErrOwnerMismatch 表示续接会话时令牌主体与会话原主不一致（第 2 关）。
@@ -29,6 +30,9 @@ type Options struct {
 
 	// DefaultRatePerSec 是令牌未自带速率配额时的服务端默认发布/请求速率（条/秒），0 表示不限。
 	DefaultRatePerSec float64
+
+	// Registry 是 topic 注册表（第 4 关的 payload 结构校验），nil 表示不校验。
+	Registry *registry.Registry
 }
 
 type dedupeEntry struct {
@@ -60,6 +64,7 @@ type Hub struct {
 
 	defaultRate float64
 	limiter     *auth.RateLimiter
+	registry    *registry.Registry
 }
 
 // NewHub 创建基站中枢。
@@ -89,6 +94,7 @@ func NewHub(opts Options) *Hub {
 		startedAt:      time.Now(),
 		defaultRate:    opts.DefaultRatePerSec,
 		limiter:        auth.NewRateLimiter(),
+		registry:       opts.Registry,
 	}
 }
 
@@ -297,6 +303,15 @@ func (h *Hub) HandleInbound(sess *Session, msg protocol.Message) {
 					h.Delete(sess.ID)
 					sess.Kick()
 				}
+				return
+			}
+		}
+		// 第 4 关（续）：注册表 payload 结构校验——已注册主题的请求必须符合声明的 schema。
+		if h.registry != nil {
+			if mErr := h.registry.ValidateRequestPayload(msg.Topic, msg.Payload); mErr != nil {
+				h.logger.Debug("request payload rejected by registry",
+					"sessionId", sess.ID, "topic", msg.Topic, "error", mErr.Message)
+				h.send(sess, protocol.TypeRes, msg.Topic, msg.ID, nil, mErr)
 				return
 			}
 		}

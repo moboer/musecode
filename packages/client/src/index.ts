@@ -1,5 +1,11 @@
 export { BaseStationClient } from "./client.js";
 export { browserHost } from "./host.js";
+export { workerHost } from "./hosts/worker-host.js";
+export { WorkerRouter } from "./hosts/worker-router.js";
+export type { PortLike, RouterClient, WorkerRouterOptions } from "./hosts/worker-router.js";
+export { SharedWorkerClient, createBestClient } from "./hosts/shared-worker-client.js";
+export type { SharedWorkerClientOptions } from "./hosts/shared-worker-client.js";
+export type { PortEvent, PortRequest } from "./hosts/worker-protocol.js";
 export type { CoreHost, HostStorage } from "./host.js";
 export { initBaseStation, getBaseStation, isBaseStationReady } from "./singleton.js";
 export { Subscription } from "./types.js";

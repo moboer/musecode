@@ -16,6 +16,7 @@ import (
 
 	"basestation/internal/biz"
 	"basestation/internal/hub"
+	"basestation/internal/registry"
 	"basestation/internal/transport/httpx"
 )
 
@@ -60,6 +61,7 @@ func main() {
 		HandlerTimeout:    *handlerTimeout,
 		Logger:            logger,
 		DefaultRatePerSec: *ratePerSec,
+		Registry:          registry.Default(),
 	})
 	h.Start(ctx)
 	biz.Register(ctx, h, *version)

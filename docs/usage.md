@@ -411,3 +411,100 @@ WS 经 `?token=` 传递，轮询经 `Authorization: Bearer` 头，客户端自�
 | 信封里伪造 `tenant/sender` | 被服务端按令牌盖章覆写，处理器只看到真实主体 |
 | 超过 `rate` 狂发 | `res` 帧 `RATE_LIMITED`；累计违规 5 次断开会话 |
 | 令牌被 admin 吊销（`POST /api/auth/revoke`） | 存量会话立即踢除，新连接 401 |
+
+## 12. 标准组件与多标签
+
+### 12.1 Topic 注册表与代码生成
+
+主题的契约只写一处：`registry/topics.json`。每条包含主题名、方向（`request` 事件型为 `event`）、投递意图（`delivery`）、保留策略（`retention`）、payload 的 JSON Schema（简化版：properties/required）。
+
+改完运行：
+
+```bash
+npm run gen:topics
+```
+
+生成两份代码（禁止手改）：
+
+- `packages/protocol/src/topics.ts`：`Topics` 常量、`TOPIC_META`、各主题的 payload TS 接口（如 `MetricsCpuPayload`）
+- `server/internal/registry/topics_gen.go`：服务端校验表
+
+服务端启动时自动挂载注册表：第 4 关会对**已注册**主题的请求做 payload 结构校验（必填缺失/类型错误回 `BAD_MESSAGE` 且不进处理器）；未注册主题保持开放（注册表只约束已声明契约的主题）。
+
+### 12.2 Web Component（框架无关）
+
+```html
+<script type="module">
+  import { defineBaseStationComponents } from "@basestation/component";
+  defineBaseStationComponents();
+</script>
+
+<base-station url="http://localhost:8080" token="...">
+  <bs-subscribe topic="metrics.cpu" show></bs-subscribe>
+</base-station>
+<script>
+  document.querySelector("bs-subscribe").addEventListener("bs-message", (e) => {
+    console.log(e.detail.topic, e.detail.payload);
+  });
+</script>
+```
+
+- `<base-station>`：挂载建连、卸载断开，`url`/`token` 属性变化重建连接；状态变化派发冒泡的 `bs-state` 事件，错误派发 `bs-error`。
+- `<bs-subscribe>`：订阅 `topic` 属性指定的主题；带 `show` 时把最新 payload 以 JSON 渲染进自身文本。必须放在 `<base-station>` 里面。
+
+### 12.3 React 绑定
+
+```tsx
+import { BaseStationProvider, useSubscription } from "@basestation/react";
+
+function CpuMeter() {
+  const [cpu, setCpu] = useState<MetricsCpuPayload | null>(null);
+  useSubscription<MetricsCpuPayload>(Topics.MetricsCpu, setCpu);
+  return <div>{cpu?.value ?? "—"}%</div>;
+}
+
+export const App = () => (
+  <BaseStationProvider url="http://localhost:8080" token={token}>
+    <CpuMeter />
+  </BaseStationProvider>
+);
+```
+
+`useSubscription` 挂载订阅、卸载退订、topic 变化换订；handler 换新函数不会导致重订阅。另有 `useBaseStation()`（取客户端发请求）与 `useBaseStationState()`（观察连接状态）。
+
+### 12.4 Vue 绑定
+
+```ts
+// main.ts
+import { createBaseStationPlugin } from "@basestation/vue";
+app.use(createBaseStationPlugin({ url: "http://localhost:8080", token }));
+
+// 组件 setup 内
+import { useSubscription } from "@basestation/vue";
+useSubscription<MetricsCpuPayload>(Topics.MetricsCpu, (payload) => {
+  cpu.value = payload.value;
+});
+```
+
+`useSubscription` 的 topic 传 `Ref<string>` 时，值变化会自动换订。
+
+### 12.5 SharedWorker 多标签单连接
+
+同源打开多个标签页时，让它们共享 worker 里的一条连接：
+
+```ts
+import { createBestClient } from "@basestation/client";
+
+const bs = createBestClient({
+  url: "http://localhost:8080",
+  token,
+  // worker 脚本：@basestation/client 的构建产物 dist/hosts/worker-entry.js，
+  // 也可以用打包器 import workerUrl from "@basestation/client/dist/hosts/worker-entry.js?url"
+  workerUrl: "/assets/worker-entry.js",
+});
+await bs.connect();
+```
+
+- 支持 SharedWorker 的浏览器：真实客户端跑在 worker 里，页面只是 stub；订阅按主题做引用计数（多标签订同一主题只占一份真实订阅、事件扇出），标签关闭（bye 或 15 秒心跳超时）后其订阅自动清理，无残留。
+- 不支持时（或没传 `workerUrl`）：`createBestClient` 自动降级为普通 `BaseStationClient`（每标签一条连接），业务代码无感。
+- 注意：worker 里的会话不落盘（Worker 无 localStorage），worker 重启会新建会话，靠服务端宽限续接兜底。
