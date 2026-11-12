@@ -1,7 +1,27 @@
 {
   "name": "@basestation/protocol",
   "version": "1.0.0",
-  "private": true,
+  "description": "基站协议层：消息信封、错误码与主题类型（零运行时依赖）",
+  "license": "MIT",
+  "keywords": [
+    "basestation",
+    "protocol",
+    "websocket",
+    "pubsub",
+    "envelope"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moboer/musecode.git",
+    "directory": "packages/protocol"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,6 +32,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "prepublishOnly": "tsc -b"
   }
 }

@@ -17,9 +17,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"basestation/internal/auth"
-	"basestation/internal/hub"
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/hub"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 const testSecret = "test-secret"

@@ -1,4 +1,4 @@
-module basestation
+module github.com/moboer/musecode/server
 
 go 1.24
 

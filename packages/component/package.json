@@ -1,1 +1,45 @@
-{"dependencies":{"@basestation/client":"1.0.0","@basestation/protocol":"1.0.0"},"devDependencies":{"jsdom":"^27.0.0"},"exports":{".":{"default":"./dist/index.js","types":"./dist/index.d.ts"}},"main":"./dist/index.js","name":"@basestation/component","private":true,"scripts":{"build":"tsc -b"},"type":"module","types":"./dist/index.d.ts","version":"1.0.0"}
+{
+  "dependencies": {
+    "@basestation/client": "1.0.0",
+    "@basestation/protocol": "1.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^27.0.0"
+  },
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "name": "@basestation/component",
+  "scripts": {
+    "build": "tsc -b",
+    "prepublishOnly": "tsc -b"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "version": "1.0.0",
+  "description": "基站 Web Components 标准组件：<base-station> / <bs-subscribe>，框架无关，开箱即用",
+  "license": "MIT",
+  "keywords": [
+    "basestation",
+    "web-components",
+    "custom-elements",
+    "websocket",
+    "pubsub"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moboer/musecode.git",
+    "directory": "packages/component"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"basestation/internal/auth"
-	"basestation/internal/hub"
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/hub"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // authenticate 是第 1/2 关的统一入口：从 Authorization 头或 ?token= 取令牌并校验。

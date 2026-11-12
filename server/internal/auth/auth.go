@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // Claims 是消息令牌的载荷。字段与签发端点（/api/auth/dev-token）的 JSON 对齐。

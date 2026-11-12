@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"basestation/internal/auth"
-	"basestation/internal/protocol"
-	"basestation/internal/registry"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/protocol"
+	"github.com/moboer/musecode/server/internal/registry"
 )
 
 // ErrOwnerMismatch 表示续接会话时令牌主体与会话原主不一致（第 2 关）。

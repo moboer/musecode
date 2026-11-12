@@ -19,7 +19,8 @@
     "test:probe": "vitest run --config vitest.probe.config.ts",
     "check:host": "node scripts/check-core-host.mjs",
     "gen:topics": "node scripts/gen-topics.mjs",
-    "dev:server:jwt": "go -C server run ./cmd/basestation -addr :8081 -auth-mode jwt -auth-secret dev-secret -dev-token"
+    "dev:server:jwt": "go -C server run ./cmd/basestation -addr :8081 -auth-mode jwt -auth-secret dev-secret -dev-token",
+    "pack:packages": "node scripts/pack-packages.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

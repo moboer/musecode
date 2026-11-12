@@ -1,6 +1,6 @@
 package hub
 
-import "basestation/internal/protocol"
+import "github.com/moboer/musecode/server/internal/protocol"
 
 // 订阅倒排索引：pattern → 会话集合。Publish 只遍历已注册的模式，
 // 未订阅的会话不会收到任何一帧。

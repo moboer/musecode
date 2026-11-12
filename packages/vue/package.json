@@ -1,1 +1,49 @@
-{"dependencies":{"@basestation/client":"1.0.0","@basestation/protocol":"1.0.0"},"devDependencies":{"jsdom":"^27.0.0","vue":"^3.5.0"},"exports":{".":{"default":"./dist/index.js","types":"./dist/index.d.ts"}},"main":"./dist/index.js","name":"@basestation/vue","peerDependencies":{"vue":"^3.0.0"},"private":true,"scripts":{"build":"tsc -b"},"type":"module","types":"./dist/index.d.ts","version":"1.0.0"}
+{
+  "dependencies": {
+    "@basestation/client": "1.0.0",
+    "@basestation/protocol": "1.0.0"
+  },
+  "devDependencies": {
+    "jsdom": "^27.0.0",
+    "vue": "^3.5.0"
+  },
+  "exports": {
+    ".": {
+      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.js",
+  "name": "@basestation/vue",
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "prepublishOnly": "tsc -b"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "version": "1.0.0",
+  "description": "基站 Vue 3 绑定：插件与 useSubscription 等组合式函数",
+  "license": "MIT",
+  "keywords": [
+    "basestation",
+    "vue",
+    "composition-api",
+    "websocket",
+    "pubsub"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moboer/musecode.git",
+    "directory": "packages/vue"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

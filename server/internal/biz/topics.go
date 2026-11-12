@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"basestation/internal/hub"
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/hub"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // Service 演示请求处理器与周期发布器。

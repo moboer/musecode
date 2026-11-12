@@ -59,6 +59,15 @@ docs/learning-guide.md  初学者学习文档（概念、代码地图、动手�
 scripts/dev.mjs         并行拉起基站与演示页
 ```
 
+## 集成到你的项目（标准组件）
+
+后端是 Go module、前端是 npm 包，不用改你项目的结构：
+
+- 后端：`go get github.com/moboer/musecode/server@basestaiton`，import `basestation` 包，`New()` + `HandleRequest()` + `Serve()` 三步；
+- 前端：`npm install @basestation/client`（另有 `@basestation/component` / `@basestation/react` / `@basestation/vue`）。
+
+完整片段（独立运行 / 嵌入现有 mux / 四种前端用法 / 发布流程）见 [docs/integration.md](docs/integration.md)。
+
 ## 快速开始
 
 环境要求：Go 1.24+、Node 20.19+。

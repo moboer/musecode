@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"basestation/internal/auth"
-	"basestation/internal/protocol"
-	"basestation/internal/registry"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/protocol"
+	"github.com/moboer/musecode/server/internal/registry"
 )
 
 func testHub() *Hub {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"basestation/internal/hub"
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/hub"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // handleWS 升级为长连接。会话在升级后立即收到 hello，

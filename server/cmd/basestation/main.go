@@ -1,23 +1,21 @@
-// Command basestation 启动基站服务。
+// Command basestation 启动独立版基站服务。
+//
+// 本命令只是标准集成面（server/basestation 包）的一层薄壳：解析命令行、
+// 组装 Config、带演示业务独立运行。宿主项目集成时不需要这个命令，
+// 直接 import basestation 包即可（见 docs/integration.md）。
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"basestation/internal/biz"
-	"basestation/internal/hub"
-	"basestation/internal/registry"
-	"basestation/internal/transport/httpx"
+	"github.com/moboer/musecode/server/basestation"
 )
 
 func main() {
@@ -41,12 +39,24 @@ func main() {
 	if *authSecret == "" {
 		*authSecret = os.Getenv("BS_AUTH_SECRET")
 	}
-	if *authMode != "none" && *authMode != "jwt" {
-		logger.Error("unknown -auth-mode", "value", *authMode)
-		os.Exit(2)
-	}
-	if *authMode == "jwt" && *authSecret == "" {
-		logger.Error("-auth-mode=jwt requires -auth-secret or BS_AUTH_SECRET")
+
+	srv := basestation.New(basestation.Config{
+		Version:           *version,
+		Logger:            logger,
+		Grace:             *grace,
+		Heartbeat:         *heartbeat,
+		PollWait:          *pollWait,
+		HandlerTimeout:    *handlerTimeout,
+		CORSOrigins:       splitOrigins(*cors),
+		AuthMode:          *authMode,
+		AuthSecret:        *authSecret,
+		DevToken:          *devToken,
+		MaxConnsPerUser:   *maxConns,
+		DefaultRatePerSec: *ratePerSec,
+		DemoBusiness:      true, // 独立演示服务带内置演示业务；宿主集成时不要开
+	})
+	if err := srv.Validate(); err != nil {
+		logger.Error("invalid config", "error", err)
 		os.Exit(2)
 	}
 	if *authMode == "none" {
@@ -56,49 +66,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	h := hub.NewHub(hub.Options{
-		Grace:             *grace,
-		HandlerTimeout:    *handlerTimeout,
-		Logger:            logger,
-		DefaultRatePerSec: *ratePerSec,
-		Registry:          registry.Default(),
-	})
-	h.Start(ctx)
-	biz.Register(ctx, h, *version)
-
-	transport := httpx.New(h, httpx.Config{
-		Grace:           *grace,
-		Heartbeat:       *heartbeat,
-		PollWait:        *pollWait,
-		CORSOrigins:     splitOrigins(*cors),
-		Version:         *version,
-		AuthMode:        *authMode,
-		AuthSecret:      *authSecret,
-		DevToken:        *devToken,
-		MaxConnsPerUser: *maxConns,
-	}, logger)
-
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           transport.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+	if err := srv.Serve(ctx, *addr); err != nil {
+		logger.Error("serve failed", "error", err)
+		os.Exit(1)
 	}
-
-	go func() {
-		logger.Info("base station listening",
-			"addr", *addr, "ws", "/ws", "poll", "/api/sessions", "version", *version)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("listen failed", "error", err)
-			stop()
-		}
-	}()
-
-	<-ctx.Done()
-	logger.Info("shutting down base station")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
+	logger.Info("base station stopped")
 }
 
 func newLogger(level string) *slog.Logger {

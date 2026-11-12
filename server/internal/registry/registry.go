@@ -6,7 +6,7 @@ package registry
 import (
 	"encoding/json"
 
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // FieldSpec 是 payload 的一个字段约束（由 JSON Schema 的 properties 简化生成）。

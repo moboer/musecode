@@ -1,7 +1,28 @@
 {
   "name": "@basestation/client",
   "version": "1.0.0",
-  "private": true,
+  "description": "基站 TypeScript 客户端 SDK：单连接多路复用、按需订阅、WebSocket/长轮询无感切换、会话续接、SharedWorker 多标签共享连接",
+  "license": "MIT",
+  "keywords": [
+    "basestation",
+    "websocket",
+    "pubsub",
+    "sdk",
+    "sharedworker",
+    "realtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moboer/musecode.git",
+    "directory": "packages/client"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,6 +40,7 @@
     "@basestation/protocol": "1.0.0"
   },
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b",
+    "prepublishOnly": "tsc -b"
   }
 }

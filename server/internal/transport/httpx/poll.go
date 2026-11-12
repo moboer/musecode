@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 type createSessionResponse struct {

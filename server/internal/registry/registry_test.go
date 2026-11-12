@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 func TestValidateRequestPayload(t *testing.T) {

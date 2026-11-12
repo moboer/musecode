@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"basestation/internal/auth"
-	"basestation/internal/hub"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/hub"
 )
 
 // Config 是传输层配置。

@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"basestation/internal/auth"
-	"basestation/internal/protocol"
+	"github.com/moboer/musecode/server/internal/auth"
+	"github.com/moboer/musecode/server/internal/protocol"
 )
 
 // OutboxSize 是每个会话的出站队列容量。队列满时丢弃最旧帧，
