@@ -58,6 +58,16 @@ export interface BaseStationOptions {
   /** 降级到轮询后尝试升级回 WS 的间隔 */
   wsUpgradeProbeMs?: number;
   reconnect?: ReconnectOptions;
+  /**
+   * 网络试探（重连前先行：先探网络、再探服务）。WS 断连进入重连后，每轮
+   * 先探一次可达性：不可达时本轮跳过 WS 与轮询的尝试（网络全断时降级没有
+   * 意义），只按重连退避继续试探；可达后才走 WS → 轮询的传输阶梯。
+   * 默认实现是对基站 `GET /api/health` 的轻量请求（能拿到任何 HTTP 响应
+   * 即视为可达，抛错/超时视为不可达）。可注入自定义实现（如改探业务网关）。
+   */
+  networkProbe?: () => Promise<boolean>;
+  /** 网络试探超时（ms），默认 2000；设为 0 禁用试探，重连直接尝试传输（旧行为） */
+  networkProbeTimeoutMs?: number;
   /** 默认 "basestation.sessionId"；false 表示不持久化 */
   sessionStorageKey?: string | false;
   /** 依赖注入，主要用于测试 */

@@ -178,7 +178,24 @@ app.use(createBaseStationPlugin({ url: "http://localhost:8080" }));
 useSubscription("metrics.cpu", (p) => console.log("cpu", p.value));
 ```
 
-### 2.5 鉴权（后端 jwt 模式时）
+### 2.5 弱网与重连（自动，两个选项可调）
+
+断线后的恢复顺序是**先探网络、再探服务**：每轮先对基站 `/api/health` 做
+一次轻量试探（2 秒超时），不通就保持重连退避、**不白试 WS、也不降级轮询**
+（网络全断时降级没有意义）；通了才走 WS → 轮询阶梯，WS 只是被代理挡住时
+降级轮询并持续探测升回。会话在服务端保留 30 秒，断线期间的消息排队待发、
+重连后自动续接，订阅自动重放，业务代码什么都不用管。可调项：
+
+```ts
+new BaseStationClient({
+  url,
+  networkProbeTimeoutMs: 2000,          // 试探超时；0 = 禁用试探（旧行为）
+  // networkProbe: async () => true,    // 自定义试探（如改探业务网关）
+  reconnect: { baseDelayMs: 500, maxDelayMs: 10_000 },  // 退避节奏
+});
+```
+
+### 2.6 鉴权（后端 jwt 模式时）
 
 前端只需带上令牌，其余验证都在后端：
 

@@ -40,6 +40,8 @@ interface ResolvedOptions {
   wsUpgradeProbeMs: number;
   sessionStorageKey: string | false;
   reconnect: Required<ReconnectOptions>;
+  networkProbe?: () => Promise<boolean>;
+  networkProbeTimeoutMs: number;
   onSeqGap?: (info: SeqGapInfo) => void;
   tokenProvider?: TokenProvider;
   logger?: (level: LogLevel, event: string, meta?: unknown) => void;
@@ -113,6 +115,8 @@ export class BaseStationClient implements IBaseStationClient {
         factor: reconnect.factor ?? 2,
         jitterRatio: reconnect.jitterRatio ?? 0.2,
       },
+      networkProbe: options.networkProbe,
+      networkProbeTimeoutMs: options.networkProbeTimeoutMs ?? 2000,
       onSeqGap: options.onSeqGap,
       tokenProvider: options.tokenProvider ?? (options.token ? () => options.token : undefined),
       logger: options.logger,
@@ -313,6 +317,13 @@ export class BaseStationClient implements IBaseStationClient {
 
   private async recoverToPoll(): Promise<void> {
     if (this.manualClose) return;
+    // 先探网络、再探服务：不可达时降级轮询必然失败，直接进重连试探循环，
+    // 不白建轮询会话。试探本身在重连循环里每轮也会先行（见 reconnectOnce）。
+    if (!(await this.probeReachable())) {
+      this.log("warn", "network_unreachable", { phase: "fallback" });
+      this.enterReconnecting();
+      return;
+    }
     try {
       await this.switchTo("poll");
       this.setState("degraded", "fallback:poll");
@@ -346,8 +357,47 @@ export class BaseStationClient implements IBaseStationClient {
     }, delay);
   }
 
+  /**
+   * 网络试探：重连每轮的第一道关（先探网络、再探服务）。
+   * 返回 false 表示当前不可达——可能是本机断网，也可能是服务端进程不在，
+   * 两种情况尝试 WS/轮询都必然失败，本轮直接跳过，等下一轮退避再探。
+   */
+  private async probeReachable(): Promise<boolean> {
+    if (this.opts.networkProbe) {
+      try {
+        return await this.opts.networkProbe();
+      } catch {
+        return false;
+      }
+    }
+    const timeoutMs = this.opts.networkProbeTimeoutMs;
+    if (!timeoutMs || timeoutMs <= 0) return true; // 已禁用试探：直接走传输阶梯
+    const base = this.opts.url.endsWith("/") ? this.opts.url.slice(0, -1) : this.opts.url;
+    const ctrl = new AbortController();
+    const timer = this.host.setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      // 能拿到任何 HTTP 响应即说明网络与服务进程都可达；状态码不重要，
+      // 真正的可用性由随后的传输阶梯（WS → 轮询）判定。
+      await this.host.fetch(`${base}/api/health`, {
+        method: "GET",
+        signal: ctrl.signal,
+        cache: "no-store",
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.host.clearTimeout(timer);
+    }
+  }
+
   private async reconnectOnce(): Promise<void> {
     if (this.manualClose || this._state === "connected") return;
+    if (!(await this.probeReachable())) {
+      this.log("warn", "network_unreachable", { attempt: this.reconnectAttempt });
+      this.scheduleReconnect();
+      return;
+    }
     const preferWs = this.opts.transport !== "poll";
     try {
       if (preferWs) {

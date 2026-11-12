@@ -116,6 +116,8 @@ function makeClient(factory: MockFactory, overrides: Record<string, unknown> = {
     wsUpgradeProbeMs: 60000,
     requestTimeoutMs: 100,
     reconnect: { baseDelayMs: 10, maxDelayMs: 20, factor: 2, jitterRatio: 0 },
+    // 默认视为网络可达（重连前的网络试探放行）；试探相关用例单独覆写
+    networkProbe: async () => true,
     ...overrides,
   });
   clients.push(client);
@@ -357,6 +359,85 @@ describe("BaseStationClient 单一连接与降级", () => {
     factory.wsStartError = null;
     await waitFor(() => client.transportKind === "ws", 2000);
     expect(client.state).toBe("connected");
+  });
+
+  it("网络不可达时只试探不试传输：不降级轮询、不新建 WS，恢复后直连 WS", async () => {
+    const factory = new MockFactory();
+    let reachable = true;
+    const client = makeClient(factory, { networkProbe: async () => reachable });
+    await client.connect();
+    expect(factory.wsList.length).toBe(1);
+
+    reachable = false;
+    factory.ws.simulateClose("network");
+    await waitFor(() => client.state === "reconnecting");
+    // 给重连循环留出数轮退避（10–20ms/轮）的时间：期间不应尝试任何传输
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(factory.pollList.length).toBe(0);
+    expect(factory.wsList.length).toBe(1);
+    expect(client.state).toBe("reconnecting");
+
+    // 网络恢复：下一轮试探放行，直接回 WS，不经轮询
+    reachable = true;
+    await waitFor(() => client.state === "connected", 2000);
+    expect(client.transportKind).toBe("ws");
+    expect(factory.wsList.length).toBe(2);
+    expect(factory.pollList.length).toBe(0);
+  });
+
+  it("网络可达但 WS 被挡时，重连仍按阶梯降级到轮询", async () => {
+    const factory = new MockFactory();
+    const client = makeClient(factory); // 默认 networkProbe 恒为 true
+    await client.connect();
+
+    factory.wsStartError = new Error("ws blocked by proxy");
+    factory.ws.simulateClose("network");
+    await waitFor(() => client.transportKind === "poll", 2000);
+    expect(client.state).toBe("degraded");
+    expect(factory.pollList.length).toBe(1);
+  });
+
+  it("默认试探走 host.fetch 打 health；超时设 0 时禁用试探、不再打 health", async () => {
+    const fetchUrls: string[] = [];
+    const failingHost = {
+      setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+      clearTimeout: (id: ReturnType<typeof setTimeout> | null | undefined) => clearTimeout(id ?? undefined),
+      setInterval: (cb: () => void, ms: number) => setInterval(cb, ms),
+      clearInterval: (id: ReturnType<typeof setInterval> | null | undefined) => clearInterval(id ?? undefined),
+      now: () => Date.now(),
+      storage: null,
+      WebSocket: globalThis.WebSocket,
+      fetch: async (input: unknown) => {
+        fetchUrls.push(String(input));
+        throw new Error("network down");
+      },
+    };
+    const healthHits = () => fetchUrls.filter((u) => u.includes("/api/health")).length;
+
+    const factory = new MockFactory();
+    const client = makeClient(factory, { networkProbe: undefined, host: failingHost });
+    await client.connect();
+    factory.ws.simulateClose("network");
+    await waitFor(() => client.state === "reconnecting");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(healthHits()).toBeGreaterThan(0); // 默认试探确实在打 health
+    expect(factory.wsList.length).toBe(1); // 且没放行任何传输尝试
+    expect(factory.pollList.length).toBe(0);
+    await client.disconnect();
+
+    // 禁用试探（超时 0）：不再打 health，直接按旧行为尝试降级轮询
+    const factory2 = new MockFactory();
+    const hitsBefore = healthHits();
+    const client2 = makeClient(factory2, {
+      networkProbe: undefined,
+      networkProbeTimeoutMs: 0,
+      host: failingHost,
+    });
+    await client2.connect();
+    factory2.ws.simulateClose("network");
+    await waitFor(() => client2.transportKind === "poll", 2000);
+    expect(factory2.pollList.length).toBe(1);
+    expect(healthHits()).toBe(hitsBefore);
   });
 
   it("重复 connect 不会创建第二条连接", async () => {
