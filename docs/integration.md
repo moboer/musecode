@@ -97,6 +97,18 @@ mux.Handle("/", srv.Handler()) // 基站路由
 注意：基站会占用 `/ws` 与 `/api/` 前缀，宿主不要在这些路径上再注册
 自己的处理器；宿主自己的中间件（日志、panic 恢复等）照常包在外面即可。
 
+宿主的 `/api` 已被占用时，给 Config 加路径前缀整体避让：
+
+```go
+srv := basestation.New(basestation.Config{ PathPrefix: "/bs" /* 其余同上 */ })
+// Gin：r.Any("/bs/*path", gin.WrapH(srv.Handler()))
+// 标准 mux：mux.Handle("/bs/", srv.Handler()) 或整站挂载后由基站自剥前缀
+```
+
+路由随之变为 `/bs/ws`、`/bs/api/sessions`、`/bs/api/health`；前端
+`url` 写成 `http://host:8080/bs` 即可，其余用法（包括两段试探的服务段
+地址）自动跟随。
+
 ### 验证（两种形态通用）
 
 启动后：
@@ -159,6 +171,20 @@ func registerBusiness(srv *basestation.Server) {
    `subscribe` 决定可订阅范围（支持 `*` 与 `前缀.*` 与私人主题
    `user.{自己的 sub}`），越权订阅/请求会被后端拒绝并审计；令牌可按
    `jti` 吊销（`POST /api/auth/revoke`，需 admin 令牌），吊销即踢线。
+
+   **生产推荐**：不要开 DevToken 端点，改由宿主在自己的已鉴权端点里
+   调用 `srv.IssueToken(...)` 签发（宿主登录态校验通过之后）：
+
+   ```go
+   // 例：挂在宿主管理员中间件之后的端点里
+   issued, err := srv.IssueToken(basestation.TokenRequest{
+       Subject:   "admin",
+       Subscribe: []string{"device.*", "stats.*"},
+       Publish:   []string{"stats.*"},
+       TTL:       time.Hour,
+   })
+   // issued.Token 交给前端；issued.ID 是 jti，可用于吊销
+   ```
 3. 前端带令牌：见 5.6。验证都在后端全链路执行，前端那份只是镜像。
 
 ## 第 5 步：前端安装与接线

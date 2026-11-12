@@ -5,3 +5,4 @@ server/bin/
 .DS_Store
 .vite/
 coverage/
+packs/
