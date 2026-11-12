@@ -187,7 +187,9 @@ function toWsUrl(baseUrl: string, sessionId: string | null, token: string | null
     url = new URL(baseUrl, "http://localhost:8080");
   }
   url.protocol = url.protocol === "https:" || url.protocol === "wss:" ? "wss:" : "ws:";
-  url.pathname = "/ws";
+  // 在 base 的路径后追加 /ws（base 可能带宿主前缀，如 http://host/bs → ws://host/bs/ws）
+  const basePath = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+  url.pathname = `${basePath}/ws`;
   // 浏览器 WebSocket 不能设请求头，令牌经 query 传递（服务端第 2 关校验）。
   const params = new URLSearchParams();
   if (sessionId) params.set("sessionId", sessionId);

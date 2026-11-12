@@ -80,6 +80,42 @@ describe("令牌传递（服务端 jwt 模式的第 2 关）", () => {
     transport.stop();
   });
 
+  it("base 带路径前缀时 WS 地址保留前缀（/bs → /bs/ws）", async () => {
+    let seenUrl = "";
+    class FakeWebSocket {
+      private listeners = new Map<string, ((ev: never) => void)[]>();
+      constructor(url: string) {
+        seenUrl = url;
+        queueMicrotask(() => {
+          this.emit("open", {});
+          const hello = createMessage("hello", {
+            sessionId: "s9",
+            payload: { sessionId: "s9", resumed: false },
+          });
+          this.emit("message", { data: JSON.stringify(hello) });
+        });
+      }
+      addEventListener(type: string, cb: (ev: never) => void): void {
+        this.listeners.set(type, [...(this.listeners.get(type) ?? []), cb]);
+      }
+      removeEventListener(): void {}
+      private emit(type: string, ev: unknown): void {
+        for (const cb of this.listeners.get(type) ?? []) cb(ev as never);
+      }
+      send(): void {}
+      close(): void {}
+    }
+    const transport = new WebSocketTransport(
+      "http://localhost:8080/bs",
+      null,
+      FakeWebSocket as unknown as typeof WebSocket,
+    );
+    const info = await transport.start();
+    expect(info.sessionId).toBe("s9");
+    expect(seenUrl.startsWith("ws://localhost:8080/bs/ws")).toBe(true);
+    transport.stop();
+  });
+
   it("无令牌时不带 token 参数与 Authorization 头（兼容 auth-mode=none）", async () => {
     let seenUrl = "";
     class FakeWebSocket {
