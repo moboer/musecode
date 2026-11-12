@@ -41,6 +41,7 @@ interface ResolvedOptions {
   sessionStorageKey: string | false;
   reconnect: Required<ReconnectOptions>;
   networkProbe?: () => Promise<boolean>;
+  networkProbeUrl?: string;
   networkProbeTimeoutMs: number;
   onSeqGap?: (info: SeqGapInfo) => void;
   tokenProvider?: TokenProvider;
@@ -116,6 +117,7 @@ export class BaseStationClient implements IBaseStationClient {
         jitterRatio: reconnect.jitterRatio ?? 0.2,
       },
       networkProbe: options.networkProbe,
+      networkProbeUrl: options.networkProbeUrl,
       networkProbeTimeoutMs: options.networkProbeTimeoutMs ?? 2000,
       onSeqGap: options.onSeqGap,
       tokenProvider: options.tokenProvider ?? (options.token ? () => options.token : undefined),
@@ -317,11 +319,14 @@ export class BaseStationClient implements IBaseStationClient {
 
   private async recoverToPoll(): Promise<void> {
     if (this.manualClose) return;
-    // 先探网络、再探服务：不可达时降级轮询必然失败，直接进重连试探循环，
-    // 不白建轮询会话。试探本身在重连循环里每轮也会先行（见 reconnectOnce）。
-    if (!(await this.probeReachable())) {
-      this.log("warn", "network_unreachable", { phase: "fallback" });
-      this.enterReconnecting();
+    // 先探网络、再探服务：任一段不通时降级轮询必然失败，直接进重连
+    // 试探循环，不白建轮询会话（重连循环每轮也会先试探，见 reconnectOnce）。
+    const stage = await this.probeStage();
+    if (stage !== "ok") {
+      this.log("warn", stage === "network" ? "network_unreachable" : "service_unreachable", {
+        phase: "fallback",
+      });
+      this.enterReconnecting(stage);
       return;
     }
     try {
@@ -334,9 +339,10 @@ export class BaseStationClient implements IBaseStationClient {
     }
   }
 
-  private enterReconnecting(): void {
+  private enterReconnecting(stage?: "network" | "service"): void {
     if (this.manualClose) return;
-    this.setState("reconnecting", "reconnect");
+    // 试探卡住时把卡住的段带进状态原因，业务能区分“网络断”与“服务挂”
+    this.setState("reconnecting", stage ? `probe:${stage}` : "reconnect");
     this.scheduleReconnect();
   }
 
@@ -358,31 +364,55 @@ export class BaseStationClient implements IBaseStationClient {
   }
 
   /**
-   * 网络试探：重连每轮的第一道关（先探网络、再探服务）。
-   * 返回 false 表示当前不可达——可能是本机断网，也可能是服务端进程不在，
-   * 两种情况尝试 WS/轮询都必然失败，本轮直接跳过，等下一轮退避再探。
+   * 两段试探：重连每轮的第一道关，分清“网络断”与“服务挂”。
+   * - "network"：网络段目标（页面源/可配 URL，与基站进程无关）不可达；
+   * - "service"：网络通，但基站 /api/health 不可达（服务本身的问题）；
+   * - "ok"：两段都通，可以走传输阶梯。
+   * 任一段不通时尝试 WS/轮询都必然失败，本轮跳过、等下一轮退避再探。
    */
-  private async probeReachable(): Promise<boolean> {
+  private async probeStage(): Promise<"ok" | "network" | "service"> {
     if (this.opts.networkProbe) {
+      // 自定义试探整体替换默认两段判定；false 按网络段不通上报。
       try {
-        return await this.opts.networkProbe();
+        return (await this.opts.networkProbe()) ? "ok" : "network";
       } catch {
-        return false;
+        return "network";
       }
     }
     const timeoutMs = this.opts.networkProbeTimeoutMs;
-    if (!timeoutMs || timeoutMs <= 0) return true; // 已禁用试探：直接走传输阶梯
+    if (!timeoutMs || timeoutMs <= 0) return "ok"; // 已禁用试探：直接走传输阶梯
+
+    // 第一段 · 网络：目标必须与基站进程无关，否则分不清网络断还是服务挂。
+    const hostOrigin = this.host.origin;
+    const netTarget =
+      this.opts.networkProbeUrl ??
+      (hostOrigin && /^https?:\/\//.test(hostOrigin) ? `${hostOrigin}/` : null);
+    if (netTarget && !(await this.probeUrl(netTarget, timeoutMs))) {
+      return "network";
+    }
+    // 第二段 · 服务：基站自己的健康端点。
     const base = this.opts.url.endsWith("/") ? this.opts.url.slice(0, -1) : this.opts.url;
+    if (!(await this.probeUrl(`${base}/api/health`, timeoutMs))) {
+      return "service";
+    }
+    return "ok";
+  }
+
+  /** 对单个 URL 做轻量可达性探测：拿到任何 HTTP 响应即算可达（不看状态码）。 */
+  private async probeUrl(url: string, timeoutMs: number): Promise<boolean> {
     const ctrl = new AbortController();
     const timer = this.host.setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      // 能拿到任何 HTTP 响应即说明网络与服务进程都可达；状态码不重要，
-      // 真正的可用性由随后的传输阶梯（WS → 轮询）判定。
-      await this.host.fetch(`${base}/api/health`, {
+      const res = await this.host.fetch(url, {
         method: "GET",
         signal: ctrl.signal,
         cache: "no-store",
       });
+      try {
+        await res.body?.cancel();
+      } catch {
+        // 忽略：响应头已到，可达性已确认
+      }
       return true;
     } catch {
       return false;
@@ -393,8 +423,12 @@ export class BaseStationClient implements IBaseStationClient {
 
   private async reconnectOnce(): Promise<void> {
     if (this.manualClose || this._state === "connected") return;
-    if (!(await this.probeReachable())) {
-      this.log("warn", "network_unreachable", { attempt: this.reconnectAttempt });
+    const stage = await this.probeStage();
+    if (stage !== "ok") {
+      this.log("warn", stage === "network" ? "network_unreachable" : "service_unreachable", {
+        attempt: this.reconnectAttempt,
+        phase: "reconnect",
+      });
       this.scheduleReconnect();
       return;
     }

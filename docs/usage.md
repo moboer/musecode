@@ -255,15 +255,20 @@ bs.onStateChange((state, info) => {
 | `pollWaitMs` | `25000` | 长轮询挂起时长 |
 | `wsUpgradeProbeMs` | `30000` | 降级后尝试升级回 WS 的间隔 |
 | `reconnect` | `500ms ×2 → 10s，抖动 ±20%` | 指数退避重连 |
-| `networkProbeTimeoutMs` | `2000` | 重连前的网络试探超时；`0` 表示禁用试探 |
-| `networkProbe` | 默认探基站 `/api/health` | 自定义可达性试探（如改探业务网关） |
+| `networkProbeTimeoutMs` | `2000` | 每段试探的超时；`0` 表示禁用试探 |
+| `networkProbeUrl` | 页面所在源 | 网络段试探目标（与基站进程无关的地址） |
+| `networkProbe` | 默认两段试探 | 整体替换试探逻辑的自定义实现 |
 
-**先探网络、再探服务**：WS 断连后，无论是立即降级还是退避重连，每一步先做
-网络试探（对 `/api/health` 的轻量 GET，拿到任何 HTTP 响应即算可达）。不可达
-（本机断网或服务端进程不在）时跳过本轮 WS/轮询尝试——网络全断时降级没有
-意义、只会白建会话——保持 `reconnecting` 按退避节奏继续试探；一旦可达，
-先试 WS，WS 被挡（代理等）才降级轮询，轮询通了再按 `wsUpgradeProbeMs`
-探测升回 WS。
+**先探网络、再探服务（两段试探，分清断在哪一层）**：WS 断连后，无论是立即
+降级还是退避重连，每一步先做两段试探——第一段探**网络**：目标是与基站
+进程无关的地址（默认页面所在源 `location.origin`，证明“到这台主机的网络
+路径活着”；基站在另一台主机时用 `networkProbeUrl` 显式指定）；第二段探
+**服务**：基站自己的 `/api/health`。任一段不通都跳过本轮 WS/轮询尝试
+（必然失败、只会白建会话），保持 `reconnecting` 按退避节奏继续试探；卡住
+的段经状态事件原因（`probe:network` / `probe:service`）和日志
+（`network_unreachable` / `service_unreachable`）区分上报，排障时一眼
+看出是网络断还是服务挂。两段都通才走传输阶梯：先试 WS，WS 被挡（代理等）
+才降级轮询，轮询通了再按 `wsUpgradeProbeMs` 探测升回 WS。
 
 ### 8.3 排障：强制降级
 

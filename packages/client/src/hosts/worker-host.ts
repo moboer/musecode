@@ -16,4 +16,5 @@ export const workerHost: CoreHost = {
   storage: null,
   WebSocket: globalThis.WebSocket,
   fetch: (input, init) => globalThis.fetch(input, init),
+  origin: globalThis.location?.origin ?? null,
 };

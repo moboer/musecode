@@ -440,6 +440,94 @@ describe("BaseStationClient 单一连接与降级", () => {
     expect(healthHits()).toBe(hitsBefore);
   });
 
+  it("两段试探·网络段不通：不探服务段、不试传输，状态原因报 probe:network", async () => {
+    const factory = new MockFactory();
+    let netUp = true;
+    const hits = { net: 0, health: 0 };
+    const host = {
+      setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+      clearTimeout: (id: ReturnType<typeof setTimeout> | null | undefined) => clearTimeout(id ?? undefined),
+      setInterval: (cb: () => void, ms: number) => setInterval(cb, ms),
+      clearInterval: (id: ReturnType<typeof setInterval> | null | undefined) => clearInterval(id ?? undefined),
+      now: () => Date.now(),
+      storage: null,
+      WebSocket: globalThis.WebSocket,
+      origin: "http://net.local",
+      fetch: async (input: unknown) => {
+        const url = String(input);
+        if (url.startsWith("http://net.local")) {
+          hits.net += 1;
+          if (!netUp) throw new Error("network down");
+          return { ok: true, body: undefined };
+        }
+        hits.health += 1;
+        return { ok: true, body: undefined };
+      },
+    };
+    const reasons: (string | undefined)[] = [];
+    const client = makeClient(factory, { networkProbe: undefined, host });
+    client.onStateChange((_s, info) => reasons.push(info.reason));
+    await client.connect();
+
+    netUp = false;
+    factory.ws.simulateClose("network");
+    await waitFor(() => reasons.includes("probe:network"), 2000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hits.net).toBeGreaterThan(0);
+    expect(hits.health).toBe(0); // 网络段都没过，不该去探服务段
+    expect(factory.wsList.length).toBe(1);
+    expect(factory.pollList.length).toBe(0);
+    expect(client.state).toBe("reconnecting");
+
+    netUp = true;
+    await waitFor(() => client.state === "connected", 2000);
+    expect(client.transportKind).toBe("ws");
+  });
+
+  it("两段试探·服务段不通：网络通但 health 不通，状态原因报 probe:service", async () => {
+    const factory = new MockFactory();
+    let serviceUp = true;
+    const hits = { net: 0, health: 0 };
+    const host = {
+      setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+      clearTimeout: (id: ReturnType<typeof setTimeout> | null | undefined) => clearTimeout(id ?? undefined),
+      setInterval: (cb: () => void, ms: number) => setInterval(cb, ms),
+      clearInterval: (id: ReturnType<typeof setInterval> | null | undefined) => clearInterval(id ?? undefined),
+      now: () => Date.now(),
+      storage: null,
+      WebSocket: globalThis.WebSocket,
+      origin: "http://net.local",
+      fetch: async (input: unknown) => {
+        const url = String(input);
+        if (url.startsWith("http://net.local")) {
+          hits.net += 1;
+          return { ok: true, body: undefined };
+        }
+        hits.health += 1;
+        if (!serviceUp) throw new Error("connection refused");
+        return { ok: true, body: undefined };
+      },
+    };
+    const reasons: (string | undefined)[] = [];
+    const client = makeClient(factory, { networkProbe: undefined, host });
+    client.onStateChange((_s, info) => reasons.push(info.reason));
+    await client.connect();
+
+    serviceUp = false;
+    factory.ws.simulateClose("network");
+    await waitFor(() => reasons.includes("probe:service"), 2000);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(hits.net).toBeGreaterThan(0); // 网络段探过且是通的
+    expect(hits.health).toBeGreaterThan(0); // 卡在服务段
+    expect(factory.wsList.length).toBe(1);
+    expect(factory.pollList.length).toBe(0);
+    expect(client.state).toBe("reconnecting");
+
+    serviceUp = true;
+    await waitFor(() => client.state === "connected", 2000);
+    expect(client.transportKind).toBe("ws");
+  });
+
   it("重复 connect 不会创建第二条连接", async () => {
     const factory = new MockFactory();
     const client = makeClient(factory);

@@ -24,6 +24,12 @@ export interface CoreHost {
   /** WebSocket 构造器 */
   WebSocket: typeof WebSocket;
   fetch: typeof fetch;
+  /**
+   * 宿主所在源（协议+主机+端口），供重连前的网络段试探使用——它证明的是
+   * “到这台主机的网络路径活着”，与基站进程无关。宿主无法提供时为 null，
+   * 试探会跳过网络段、只探服务段。
+   */
+  origin?: string | null;
 }
 
 /**
@@ -64,4 +70,11 @@ export const browserHost: CoreHost = {
     return globalThis.WebSocket;
   },
   fetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+  get origin() {
+    try {
+      return globalThis.location?.origin ?? null;
+    } catch {
+      return null;
+    }
+  },
 };

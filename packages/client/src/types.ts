@@ -59,14 +59,26 @@ export interface BaseStationOptions {
   wsUpgradeProbeMs?: number;
   reconnect?: ReconnectOptions;
   /**
-   * 网络试探（重连前先行：先探网络、再探服务）。WS 断连进入重连后，每轮
-   * 先探一次可达性：不可达时本轮跳过 WS 与轮询的尝试（网络全断时降级没有
-   * 意义），只按重连退避继续试探；可达后才走 WS → 轮询的传输阶梯。
-   * 默认实现是对基站 `GET /api/health` 的轻量请求（能拿到任何 HTTP 响应
-   * 即视为可达，抛错/超时视为不可达）。可注入自定义实现（如改探业务网关）。
+   * 网络试探（重连前先行，分两段判定“网络断”还是“服务挂”）：
+   * - 第一段（网络）：探一个与基站进程无关的目标（见 networkProbeUrl，
+   *   默认页面所在源）——不通说明网络/路径断了；
+   * - 第二段（服务）：探基站 `GET /api/health`——网络通而它不通，说明
+   *   基站服务本身不可用。
+   * 任一段不通，本轮都跳过 WS 与轮询的尝试（必然失败，只会白建会话），
+   * 保持重连退避继续试探；两段都通才走 WS → 轮询的传输阶梯。当前卡在
+   * 哪一段会经状态事件的 reason（`probe:network` / `probe:service`）与
+   * 日志（`network_unreachable` / `service_unreachable`）区分上报。
+   * 注入本选项可整体替换默认两段试探（返回 false 按网络段不通处理）。
    */
   networkProbe?: () => Promise<boolean>;
-  /** 网络试探超时（ms），默认 2000；设为 0 禁用试探，重连直接尝试传输（旧行为） */
+  /**
+   * 网络段试探的目标 URL。默认取页面所在源（location.origin）——它与
+   * 基站同主机/同网段时能准确代表“网络通不通”；基站在另一台主机时，
+   * 建议显式指定为那台主机或同网段常驻服务的地址。无页面环境且未指定
+   * 时跳过网络段、只探服务段。
+   */
+  networkProbeUrl?: string;
+  /** 每段试探的超时（ms），默认 2000；设为 0 禁用试探，重连直接尝试传输（旧行为） */
   networkProbeTimeoutMs?: number;
   /** 默认 "basestation.sessionId"；false 表示不持久化 */
   sessionStorageKey?: string | false;
