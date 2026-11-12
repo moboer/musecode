@@ -158,3 +158,106 @@ func TestValidateJWTRequiresSecret(t *testing.T) {
 		t.Fatal("Validate() = nil, want error for jwt without secret")
 	}
 }
+
+// TestPathPrefixMounting 验证 PathPrefix：路由整体挂到前缀下，根路径不再响应。
+func TestPathPrefixMounting(t *testing.T) {
+	srv := basestation.New(basestation.Config{PathPrefix: "/bs", DemoBusiness: true})
+	defer func() { _ = srv.Close() }()
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/bs/api/health")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("prefixed health: resp=%v err=%v", resp, err)
+	}
+	_ = resp.Body.Close()
+
+	resp2, err := http.Get(ts.URL + "/api/health")
+	if err != nil {
+		t.Fatalf("root health err: %v", err)
+	}
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Fatalf("root health status = %d, want 404", resp2.StatusCode)
+	}
+	_ = resp2.Body.Close()
+
+	// WS 也在前缀下可用
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/bs/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial prefixed ws: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var hello frame
+	if err := conn.ReadJSON(&hello); err != nil || hello.Type != "hello" {
+		t.Fatalf("hello = %+v err=%v", hello, err)
+	}
+}
+
+// TestIssueToken 验证宿主签发令牌：none 模式报错；jwt 模式下无令牌被拒、
+// 宿主签发的令牌可正常连接与请求。
+func TestIssueToken(t *testing.T) {
+	noneSrv := basestation.New(basestation.Config{})
+	defer func() { _ = noneSrv.Close() }()
+	if _, err := noneSrv.IssueToken(basestation.TokenRequest{Subject: "u1"}); err == nil {
+		t.Fatal("IssueToken in none mode should error")
+	}
+
+	srv := basestation.New(basestation.Config{
+		AuthMode: "jwt", AuthSecret: "test-secret", DemoBusiness: true,
+	})
+	defer func() { _ = srv.Close() }()
+
+	issued, err := srv.IssueToken(basestation.TokenRequest{
+		Subject: "admin", Subscribe: []string{"*"}, Publish: []string{"*"}, TTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("IssueToken: %v", err)
+	}
+	if issued.Token == "" || issued.ID == "" || issued.ExpiresAt.Before(time.Now()) {
+		t.Fatalf("issued = %+v", issued)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	wsBase := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws"
+
+	// 无令牌：握手应被拒
+	if _, resp, err := websocket.DefaultDialer.Dial(wsBase, nil); err == nil {
+		t.Fatal("dial without token should fail")
+	} else if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("dial without token: err=%v resp=%v", err, resp)
+	}
+
+	// 带宿主签发的令牌：连接 + echo 请求全通
+	conn, _, err := websocket.DefaultDialer.Dial(wsBase+"?token="+issued.Token, nil)
+	if err != nil {
+		t.Fatalf("dial with issued token: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var hello frame
+	if err := conn.ReadJSON(&hello); err != nil || hello.Type != "hello" {
+		t.Fatalf("hello = %+v err=%v", hello, err)
+	}
+	if err := conn.WriteJSON(map[string]any{
+		"type": "req", "id": "r1", "ts": 1, "topic": "echo",
+		"payload": map[string]any{"x": 1}, "error": nil,
+	}); err != nil {
+		t.Fatalf("write req: %v", err)
+	}
+	for {
+		var f frame
+		if err := conn.ReadJSON(&f); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if f.Type == "res" && f.ReplyTo == "r1" {
+			if f.Error != nil {
+				t.Fatalf("echo res error: %+v", f.Error)
+			}
+			break
+		}
+	}
+}

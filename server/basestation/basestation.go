@@ -20,15 +20,19 @@ package basestation
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/moboer/musecode/server/internal/auth"
 	"github.com/moboer/musecode/server/internal/biz"
 	"github.com/moboer/musecode/server/internal/hub"
 	"github.com/moboer/musecode/server/internal/protocol"
@@ -74,6 +78,11 @@ type Config struct {
 	// DemoBusiness 注册内置演示业务（echo / metrics / news / slow.echo / boom），
 	// 供独立演示与联调使用。真实项目应保持关闭，只注册自己的处理器。默认关闭。
 	DemoBusiness bool
+
+	// PathPrefix 把基站的全部路由挂到一个路径前缀下（如 "/bs" → /bs/ws、
+	// /bs/api/*），供嵌入宿主时避开宿主已占用的路径空间。默认 ""（根路径）。
+	// 客户端的 url 相应写成 http://host/bs 即可，其余用法不变。
+	PathPrefix string
 }
 
 // Request 是业务处理器看到的请求视图（协议信封的对外投影）。
@@ -116,9 +125,10 @@ type HandlerFunc func(ctx context.Context, req Request) (any, error)
 
 // Server 是一个基站实例。用 New 创建，Close 释放。
 type Server struct {
-	cfg  Config
-	hub  *hub.Hub
-	http *httpx.Server
+	cfg    Config
+	hub    *hub.Hub
+	http   *httpx.Server
+	signer *auth.Signer // jwt 模式下供 IssueToken 使用（与内部校验共用同一密钥）
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -157,6 +167,11 @@ func New(cfg Config) *Server {
 	if cfg.MaxConnsPerUser <= 0 {
 		cfg.MaxConnsPerUser = 10
 	}
+	// 归一化路径前缀：去掉尾部斜杠；"/" 等价于无前缀
+	cfg.PathPrefix = strings.TrimSuffix(cfg.PathPrefix, "/")
+	if cfg.PathPrefix == "/" {
+		cfg.PathPrefix = ""
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -176,6 +191,9 @@ func New(cfg Config) *Server {
 		hub:    h,
 		ctx:    ctx,
 		cancel: cancel,
+	}
+	if cfg.AuthSecret != "" {
+		s.signer = auth.NewSigner(cfg.AuthSecret)
 	}
 	s.http = httpx.New(h, httpx.Config{
 		Grace:           cfg.Grace,
@@ -202,6 +220,9 @@ func (s *Server) Validate() error {
 	}
 	if s.cfg.AuthMode == "jwt" && s.cfg.AuthSecret == "" {
 		return errors.New("basestation: AuthMode=jwt requires AuthSecret")
+	}
+	if s.cfg.PathPrefix != "" && !strings.HasPrefix(s.cfg.PathPrefix, "/") {
+		return fmt.Errorf("basestation: PathPrefix %q must start with /", s.cfg.PathPrefix)
 	}
 	return nil
 }
@@ -239,11 +260,80 @@ func (s *Server) Publish(topic string, payload any) int {
 func (s *Server) Sessions() int       { return s.hub.Count() }
 func (s *Server) DroppedTotal() int64 { return s.hub.DroppedTotal() }
 
+// TokenRequest 是 IssueToken 的签发参数（宿主在其已鉴权的端点内组装）。
+type TokenRequest struct {
+	// Subject 令牌主体（用户/服务标识），必填。私人主题 user.{Subject} 据此校验。
+	Subject string
+	// Tenant 租户标识（多租户隔离与审计用），可空。
+	Tenant string
+	// Subscribe 可订阅范围：主题或通配（"*"、"前缀.*"）；Publish 同理为可请求范围。
+	Subscribe []string
+	Publish   []string
+	// RatePerSec 请求速率上限（条/秒），0 表示用服务端默认。
+	RatePerSec float64
+	// Admin 管理员令牌（可调吊销端点等管理面）。
+	Admin bool
+	// TTL 有效期，<=0 时默认 10 分钟。
+	TTL time.Duration
+}
+
+// IssuedToken 是 IssueToken 的签发结果。ID（jti）可用于之后吊销该令牌。
+type IssuedToken struct {
+	Token     string
+	ID        string
+	ExpiresAt time.Time
+}
+
+// IssueToken 为宿主签发基站令牌。这是 DevToken 开发端点的生产替代：
+// 宿主在自己的登录态校验通过后（例如其管理员中间件之后）调用本方法，
+// 把返回的 Token 交给前端，前端以 token/tokenProvider 方式接入。
+// 仅 AuthMode="jwt" 时可用；校验、ACL、限流、吊销仍全在基站后端执行。
+func (s *Server) IssueToken(req TokenRequest) (IssuedToken, error) {
+	if s.cfg.AuthMode != "jwt" {
+		return IssuedToken{}, errors.New("basestation: IssueToken requires AuthMode=jwt")
+	}
+	if s.signer == nil {
+		return IssuedToken{}, errors.New("basestation: IssueToken requires AuthSecret")
+	}
+	if req.Subject == "" {
+		return IssuedToken{}, errors.New("basestation: TokenRequest.Subject is required")
+	}
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		return IssuedToken{}, fmt.Errorf("basestation: issue token: %w", err)
+	}
+	jti := hex.EncodeToString(jtiBytes)
+	ttl := req.TTL
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	token, err := s.signer.Issue(auth.Claims{
+		Sub:        req.Subject,
+		Tenant:     req.Tenant,
+		JTI:        jti,
+		Subscribe:  req.Subscribe,
+		Publish:    req.Publish,
+		RatePerSec: req.RatePerSec,
+		Admin:      req.Admin,
+	}, ttl)
+	if err != nil {
+		return IssuedToken{}, err
+	}
+	return IssuedToken{Token: token, ID: jti, ExpiresAt: time.Now().Add(ttl)}, nil
+}
+
 // Handler 返回基站的 HTTP 处理器（/ws、/api/sessions、/api/health、/api/auth/*），
 // 供嵌入宿主自己的 http.Server / mux。首次调用时启动会话回收等后台任务。
+// 配置了 PathPrefix 时返回的处理器期望请求路径带该前缀（内部自动剥离），
+// 宿主把它挂在前缀路径上即可（如 Gin 的 r.Any("/bs/*path", gin.WrapH(...))、
+// 标准 mux 的 mux.Handle("/bs/", h) 或整站 mux.Handle("/", h)）。
 func (s *Server) Handler() http.Handler {
 	s.start()
-	return s.http.Handler()
+	h := s.http.Handler()
+	if s.cfg.PathPrefix != "" {
+		return http.StripPrefix(s.cfg.PathPrefix, h)
+	}
+	return h
 }
 
 // Serve 在 addr 上独立运行基站，直到 ctx 结束或监听失败。
@@ -255,7 +345,7 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 	s.start()
 	s.httpSrv = &http.Server{
 		Addr:              addr,
-		Handler:           s.http.Handler(),
+		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return s.ctx },
 	}
